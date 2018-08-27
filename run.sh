@@ -1,17 +1,12 @@
 #!/bin/bash
 export CUDA_VISIBLE_DEVICES=0
 python3 main.py \
-	--test 1 \
-	--model_dir savedmodels/temp \
-	--ood_dataset noise \
+	--test 0 \
 	--resnet_size 28-10 \
+	--model_dir savedmodels/wrn28-10-unhinged-cifar10-none \
 	--dummy 0
 	# --hinged True \
-
-	# --resnet_size 50 \
-	# --model_dir savedmodels/wrn28-10-unhinged-cifar10-none \
-	# --model_dir savedmodels/cifar10_resnet50_original \
-	# --data_dir /mnt/blossom/data/ujjwaljain/cifar10_data/ \
+	# --ood_dataset noise \
 
 # --test flag:
 # check main.py

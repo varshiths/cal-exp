@@ -60,7 +60,7 @@ parser.add_argument('--hinged', type=bool, default=False,
 parser.add_argument('--train_epochs', type=int, default=250,
                     help='The number of epochs to train.')
 
-parser.add_argument('--epochs_per_eval', type=int, default=10,
+parser.add_argument('--epochs_per_eval', type=int, default=5,
                     help='The number of epochs to run in between evaluations.')
 
 parser.add_argument('--batch_size', type=int, default=128,
@@ -239,16 +239,25 @@ def cifar10_model_fn(features, labels, mode, params):
 
   if mode == tf.estimator.ModeKeys.EVAL:
 
+    a = tf.summary.scalar("accuracy", accuracy[1])
+    b = tf.summary.scalar("loss", loss)
+
     # printing stuff
     loss = tf.Print(loss, [tf.argmax(labels, 1)], summarize=1000000, message='Targets')
     loss = tf.Print(loss, [tf.argmax(logits, 1)], summarize=1000000, message='Predictions')
     loss = tf.Print(loss, [tf.nn.softmax(logits)], summarize=1000000, message='Probs')
     loss = tf.Print(loss, [logits], summarize=1000000, message='Logits')
 
+    hook = tf.train.SummarySaverHook(
+      save_steps=100,
+      # output_dir="log/eval",
+      summary_op=tf.summary.merge([a, b]),
+      )
     return tf.estimator.EstimatorSpec(
         mode=mode,
         loss=loss,
-        eval_metric_ops={'accuracy': accuracy},
+        evaluation_hooks=[hook],
+        # eval_metric_ops={'accuracy': accuracy},
         )
 
   if mode == tf.estimator.ModeKeys.TRAIN:
@@ -268,6 +277,10 @@ def cifar10_model_fn(features, labels, mode, params):
     tf.identity(learning_rate, name='learning_rate')
     tf.identity(accuracy[1], name='train_accuracy')
 
+    a = tf.summary.scalar("accuracy", accuracy[1])
+    b = tf.summary.scalar("loss", loss)
+    c = tf.summary.scalar("learning_rate", learning_rate)
+
     optimizer = tf.train.MomentumOptimizer(
         learning_rate=learning_rate,
         momentum=_MOMENTUM
@@ -278,10 +291,15 @@ def cifar10_model_fn(features, labels, mode, params):
     with tf.control_dependencies(update_ops):
       train_op = optimizer.minimize(loss, global_step)
 
+    hook = tf.train.SummarySaverHook(
+      summary_op=tf.summary.merge([a, b, c]),
+      save_steps=100,
+      )
     return tf.estimator.EstimatorSpec(
         mode=mode,
         loss=loss,
         train_op=train_op,
+        training_hooks=[hook],
         )
 
 
@@ -300,8 +318,11 @@ def main(unused_argv):
   
   # Set up a RunConfig to only save checkpoints once per training cycle.
   run_config = tf.estimator.RunConfig(
-    save_checkpoints_secs=1e9,
+    keep_checkpoint_max=100,
+    save_checkpoints_secs=1200,
+    # save_checkpoints_steps=1e3,
     session_config=session_config,
+    # save_summary_steps=100,
     )
 
   classifier = tf.estimator.Estimator(
@@ -311,7 +332,8 @@ def main(unused_argv):
           'data_format' : aconfig["data_format"],
           'batch_size'  : FLAGS.batch_size,
           'hinged'      : FLAGS.hinged,
-      })
+      },
+      )
 
   if FLAGS.test == 1 and not FLAGS.hinged:
     print(
@@ -320,24 +342,34 @@ def main(unused_argv):
       )
 
   if FLAGS.test in [0, 1]:
+    # ts_hook = tf.train.SummarySaverHook(
+    #   save_steps=10,
+    #   output_dir="log/train",
+    #   scaffold=tf.train.Scaffold(summary_op=tf.summary.merge_all()),
+    # )
+    # es_hook = tf.train.SummarySaverHook(
+    #   save_steps=0,
+    #   output_dir="log/eval/",
+    #   scaffold=tf.train.Scaffold(summary_op=tf.summary.merge_all()),
+    #   )
     for _ in range(FLAGS.train_epochs // FLAGS.epochs_per_eval):
-      tensors_to_log = {
-        'learning_rate': 'learning_rate',
-        'train_accuracy': 'train_accuracy'
-        # 'loss': 'loss',
-      }
-
-      logging_hook = tf.train.LoggingTensorHook(
-          tensors=tensors_to_log, every_n_iter=100)
+      # tensors_to_log = {
+      #   'learning_rate': 'learning_rate',
+      #   'train_accuracy': 'train_accuracy'
+      #   # 'loss': 'loss',
+      # }
+      # logging_hook = tf.train.LoggingTensorHook(
+      #   tensors=tensors_to_log, every_n_iter=100) 
 
       classifier.train(
-          input_fn=lambda: input_fn(FLAGS.test, FLAGS.data_dir, FLAGS.ood_dataset, FLAGS.batch_size, FLAGS.epochs_per_eval, hinged=FLAGS.hinged),
-          hooks=[logging_hook],
-          )
+        input_fn=lambda: input_fn(FLAGS.test, FLAGS.data_dir, FLAGS.ood_dataset, FLAGS.batch_size, FLAGS.epochs_per_eval, hinged=FLAGS.hinged),
+        # hooks=[logging_hook],
+        )
 
       # Evaluate the model and print results
       eval_results = classifier.evaluate(
-          input_fn=lambda: input_fn(FLAGS.test, FLAGS.data_dir, FLAGS.ood_dataset, FLAGS.batch_size, is_validating=True, hinged=FLAGS.hinged))
+        input_fn=lambda: input_fn(FLAGS.test, FLAGS.data_dir, FLAGS.ood_dataset, FLAGS.batch_size, is_validating=True, hinged=FLAGS.hinged),
+        )
       # print(eval_results)
 
   else:
