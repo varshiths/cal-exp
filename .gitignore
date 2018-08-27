@@ -1,0 +1,7 @@
+__pycache__/
+outputs/
+figs/
+savedmodels/
+
+*_data/
+*.png
