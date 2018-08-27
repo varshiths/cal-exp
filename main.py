@@ -12,7 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""Runs a ResNet model on the CIFAR-10 dataset."""
+# Authors: IITB
+# Modified to run calibration experiments.
+# ==============================================================================
+"""Runs a ResNet/WideResNet model on the CIFAR-10 and some other datasets."""
 
 from __future__ import absolute_import
 from __future__ import division
@@ -26,6 +29,11 @@ import tensorflow as tf
 
 import resnet_model
 from mmce import *
+
+from cifar10 import record_dataset, get_filenames, parse_record, preprocess_image
+from cifar10 import _HEIGHT, _WIDTH, _DEPTH, _NUM_CLASSES, _NUM_IMAGES
+
+from ood import _NUM_IMAGES_OOD, get_filenames as get_ood_filenames
 
 parser = argparse.ArgumentParser()
 
@@ -44,6 +52,10 @@ parser.add_argument('--resnet_size', type=str, default="50",
                           '- if of the format int-int, then wide resnet model is used'
                           '- if of the format int, then resnet is used.')
 
+parser.add_argument('--hinged', type=bool, default=False,
+                    help= 'If an additional zero logit is to be added to the output'
+                          'of te model.')
+
 parser.add_argument('--train_epochs', type=int, default=250,
                     help='The number of epochs to train.')
 
@@ -59,37 +71,17 @@ parser.add_argument('--test', type=int, default=0,
                           '1: Evaluate on eval set'
                           )
 
-parser.add_argument(
-    '--data_format', type=str, default=None,
-    choices=['channels_first', 'channels_last'],
-    help='A flag to override the data format used in the model. channels_first '
-         'provides a performance boost on GPU but is not always compatible '
-         'with CPU. If left unspecified, the data format will be chosen '
-         'automatically based on whether TensorFlow was built for CPU or GPU.')
-
-_HEIGHT = 32
-_WIDTH = 32
-_DEPTH = 3
-_NUM_CLASSES = 10 + 1
-_NUM_DATA_FILES = 5
+parser.add_argument('--ngpus', type=int, default=1,
+                    help= 'Number of gpus to be used. 0 -> cpu')
 
 # We use a weight decay of 0.0002, which performs better than the 0.0001 that
 # was originally suggested.
 _WEIGHT_DECAY = 2e-4
 _MOMENTUM = 0.9
 
-_NUM_IMAGES = {
-    'train': 50000,
-    'validation': 10000,
-}
+_TRAIN_VAL_SPLIT_SEED = 0
 
-
-def record_dataset(filenames):
-  """Returns an input pipeline Dataset from `filenames`."""
-  record_bytes = _HEIGHT * _WIDTH * _DEPTH + 1
-  return tf.data.FixedLengthRecordDataset(filenames, record_bytes)
-
-
+'''
 def get_filenames(mode, data_dir, ood_dataset):
   """Returns a list of filenames."""
   data_dir = os.path.join(data_dir, 'cifar-10-batches-bin')
@@ -120,77 +112,76 @@ def get_filenames(mode, data_dir, ood_dataset):
     datafile = os.path.join(data_dir, ood_dataset + '_ood_test_batch.bin')
     assert os.path.exists(datafile), (
         'Run make_ood_data.py for test purposes first and copy it into the cifar-10-batches-bin directory.' )
-    return [datafile]
+    # return [datafile]
+'''
 
-def parse_record(raw_record):
-  """Parse CIFAR-10 image and label from a raw record."""
-  # Every record consists of a label followed by the image, with a fixed number
-  # of bytes for each.
-  label_bytes = 1
-  image_bytes = _HEIGHT * _WIDTH * _DEPTH
-  record_bytes = label_bytes + image_bytes
+def get_train_or_val(dataset, NDICT, is_validating):
+  # first randomly shuffle the exact same way using the same constant seed
+  dataset = dataset.shuffle(
+    buffer_size=NDICT['validation'] + NDICT['train'],
+    seed=_TRAIN_VAL_SPLIT_SEED,
+    )
+  # pick subset based on whether you're validating or training
+  if not is_validating:
+    dataset = dataset.take(NDICT["train"])
+  else:
+    dataset = dataset.skip(NDICT["train"])
+  flag = int(is_validating); size = NDICT["validation"]*flag + NDICT["training"]*(1-flag)
 
-  # Convert bytes to a vector of uint8 that is record_bytes long.
-  record_vector = tf.decode_raw(raw_record, tf.uint8)
+  return dataset, size
 
-  # The first byte represents the label, which we convert from uint8 to int32
-  # and then to one-hot.
-  label = tf.cast(record_vector[0], tf.int32)
-  label = tf.one_hot(label, _NUM_CLASSES)
-
-  # The remaining bytes after the label represent the image, which we reshape
-  # from [depth * height * width] to [depth, height, width].
-  depth_major = tf.reshape(
-      record_vector[label_bytes:record_bytes], [_DEPTH, _HEIGHT, _WIDTH])
-
-  # Convert from [depth, height, width] to [height, width, depth], and cast as
-  # float32.
-  image = tf.cast(tf.transpose(depth_major, [1, 2, 0]), tf.float32)
-
-  return image, label
-
-
-def preprocess_image(image, is_training):
-  """Preprocess a single image of layout [height, width, depth]."""
-  if is_training:
-    # Resize the image to add four extra pixels on each side.
-    image = tf.image.resize_image_with_crop_or_pad(
-        image, _HEIGHT + 8, _WIDTH + 8)
-
-    # Randomly crop a [_HEIGHT, _WIDTH] section of the image.
-    image = tf.random_crop(image, [_HEIGHT, _WIDTH, _DEPTH])
-
-    # Randomly flip the image horizontally.
-    image = tf.image.random_flip_left_right(image)
-
-  # Subtract off the mean and divide by the variance of the pixels.
-  image = tf.image.per_image_standardization(image)
-  return image
-
-
-def input_fn(mode, data_dir, ood_dataset, batch_size, num_epochs=1):
+def input_fn(mode, data_dir, ood_dataset, batch_size, num_epochs=1, is_validating=False):
   """Input_fn using the tf.data input pipeline for CIFAR-10 dataset.
 
   Args:
-    mode: An int denoting whether the input is for training, eval, or specialeval.
+    mode: An int denoting whether the input is for training, test with the corresponding datasets.
+      0: train; main dataset
+      1: train; main dataset + ood dataset
+      2: test; main dataset
+      3: test; ood dataset
+      4: test; main dataset + ood dataset
     data_dir: The directory containing the input data.
+    ood_dataset: String pointing to a particular ood dataset.
     batch_size: The number of samples per batch.
     num_epochs: The number of epochs to repeat the dataset.
 
   Returns:
     A tuple of images and labels.
   """
-  dataset = record_dataset(get_filenames(mode, data_dir, ood_dataset))
+  is_training = mode in [0, 1]
+  is_ood = mode in [1, 3, 4]
+  is_main = mode in [0, 1, 2, 4]
 
-  if mode == 0:
-    # When choosing shuffle buffer sizes, larger sizes result in better
-    # randomness, while smaller sizes have better performance. Because CIFAR-10
-    # is a relatively small dataset, we choose to shuffle the full epoch.
-    dataset = dataset.shuffle(buffer_size=_NUM_IMAGES['train'])
+  assert ( is_training or not is_validating ), ("Can't perform test and validation")
+  assert (is_ood or is_main), ("Select at least one dataset.")
+  
+  ds_size, ods_size = 0, 0
+  if is_main:
+    dataset = record_dataset(get_filenames(0 if is_training else 1, data_dir))
+    ds_size = _NUM_IMAGES["test"]
+    if is_training:
+      dataset, ds_size = get_train_or_val(dataset, _NUM_IMAGES, is_validating)
+  if is_ood:
+    ood_dataset = record_dataset(get_filenames(0 if is_training else 1, data_dir, ood_dataset))
+    ods_size = _NUM_IMAGES_OOD["test"]
+    if is_training:
+      ood_dataset, ods_size = get_train_or_val(ood_dataset, _NUM_IMAGES, is_validating)
 
+  # merge the two datasets after train val split
+  if not is_main:
+    dataset = ood_dataset
+    ds_size = ods_size
+  elif is_ood:
+    dataset = dataset.concatenate(ood_dataset)
+    ds_size += ods_size
+
+  if is_training and not is_validating:
+    dataset = dataset.shuffle(
+        buffer_size=ds_size
+      )
   dataset = dataset.map(parse_record)
   dataset = dataset.map(
-      lambda image, label: (preprocess_image(image, mode == 0), label))
+      lambda image, label: (preprocess_image(image, is_training and not is_validating), label))
 
   dataset = dataset.prefetch(2 * batch_size)
 
@@ -210,16 +201,16 @@ def input_fn(mode, data_dir, ood_dataset, batch_size, num_epochs=1):
 def cifar10_model_fn(features, labels, mode, params):
   """Model function for CIFAR-10."""
 
-  # tf.summary.image('images', features, max_outputs=6)
-
   network = resnet_model.cifar10_resnet_v2_generator(
-      params['resnet_size'], _NUM_CLASSES-1, params['data_format']
+      params['resnet_size'], _NUM_CLASSES, params['data_format']
     )
 
   inputs = tf.reshape(features, [-1, _HEIGHT, _WIDTH, _DEPTH])
   logits = network(inputs, mode == tf.estimator.ModeKeys.TRAIN)
+
   # adding logit 0 for NOTA
-  logits = tf.pad( logits, [[0,0],[0, 1]], "CONSTANT")
+  if params["hinged"]:
+    logits = tf.pad( logits, [[0,0],[0, 1]], "CONSTANT")
 
   classes = tf.argmax(logits, axis=1)
 
@@ -287,6 +278,11 @@ def cifar10_model_fn(features, labels, mode, params):
 def main(unused_argv):
   # Using the Winograd non-fused algorithms provides a small performance boost.
   os.environ['TF_ENABLE_WINOGRAD_NONFUSED'] = '1'
+  aconfig = {
+    "data_format": "channels_last",
+  }
+  if FLAGS.ngpus == 1:
+    FLAGS.data_format = "channels_first"
 
   gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.66)
   session_config = tf.ConfigProto(gpu_options=gpu_options)
@@ -298,12 +294,13 @@ def main(unused_argv):
     session_config=session_config,
     )
 
-  cifar_classifier = tf.estimator.Estimator(
+  classifier = tf.estimator.Estimator(
       model_fn=cifar10_model_fn, model_dir=FLAGS.model_dir, config=run_config,
       params={
-          'resnet_size': FLAGS.resnet_size,
-          'data_format': FLAGS.data_format,
-          'batch_size': FLAGS.batch_size,
+          'resnet_size' : FLAGS.resnet_size,
+          'data_format' : aconfig["data_format"],
+          'batch_size'  : FLAGS.batch_size,
+          'hinged'      : FLAGS.hinged,
       })
 
   if FLAGS.test == 0:
@@ -317,19 +314,19 @@ def main(unused_argv):
       logging_hook = tf.train.LoggingTensorHook(
           tensors=tensors_to_log, every_n_iter=100)
 
-      cifar_classifier.train(
+      classifier.train(
           input_fn=lambda: input_fn(0, FLAGS.data_dir, FLAGS.ood_dataset, FLAGS.batch_size, FLAGS.epochs_per_eval),
           hooks=[logging_hook],
           )
 
       # Evaluate the model and print results
-      eval_results = cifar_classifier.evaluate(
+      eval_results = classifier.evaluate(
           input_fn=lambda: input_fn(1, FLAGS.data_dir, FLAGS.ood_dataset, FLAGS.batch_size))
       print(eval_results)
 
   # elif FLAGS.test == 1 or FLAGS.test == 2:
   else:
-    eval_results = cifar_classifier.evaluate(
+    eval_results = classifier.evaluate(
         input_fn=lambda: input_fn(FLAGS.test, FLAGS.data_dir, FLAGS.ood_dataset, FLAGS.batch_size))
     print(eval_results)
 

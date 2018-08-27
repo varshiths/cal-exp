@@ -4,6 +4,7 @@ outputs/
 figs/
 
 log/
+configs/
 
 *_data
 *.png
