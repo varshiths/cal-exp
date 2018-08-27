@@ -12,6 +12,8 @@ _NUM_IMAGES_OOD = {
   'test': 1000,
 }
 
+DATASETS = ["noise", "gnoise", "tin", "sun", "cifar10mix"]
+
 def get_filenames(mode, data_dir, dataset):
   """Returns a list of filenames.
   Args:
@@ -26,7 +28,7 @@ def get_filenames(mode, data_dir, dataset):
   data_dir = os.path.join(data_dir, 'cifar-10-batches-bin')
 
   assert os.path.exists(data_dir), ('Run make_ood_data.py to create OOD data')
-  assert dataset in ["noise", "gnoise", "tin", "sun", "cifar10mix"], ('invalid dataset')
+  assert dataset in DATASETS, ('invalid dataset')
 
   if mode == 0:
     datafile = os.path.join(data_dir, dataset + '_ood_batch.bin')

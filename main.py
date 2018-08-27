@@ -24,6 +24,7 @@ from __future__ import print_function
 import argparse
 import os
 import sys
+from warnings import warn
 
 import tensorflow as tf
 
@@ -311,6 +312,12 @@ def main(unused_argv):
           'batch_size'  : FLAGS.batch_size,
           'hinged'      : FLAGS.hinged,
       })
+
+  if FLAGS.test == 1 and not FLAGS.hinged:
+    print(
+      "WARNING: OOD dataset provided but no hinge, are you sure?",
+      file=sys.stderr,
+      )
 
   if FLAGS.test in [0, 1]:
     for _ in range(FLAGS.train_epochs // FLAGS.epochs_per_eval):
