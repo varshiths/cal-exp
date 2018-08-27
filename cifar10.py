@@ -48,9 +48,9 @@ def get_filenames(mode, data_dir):
     ]
 
   else:
-  	raise ValueError("unknown mode %d", % mode)
+  	raise ValueError("unknown mode %d" % mode)
 
-def parse_record(raw_record):
+def parse_record(raw_record, num_classes):
   """Parse CIFAR-10 image and label from a raw record."""
   # Every record consists of a label followed by the image, with a fixed number
   # of bytes for each.
@@ -64,7 +64,7 @@ def parse_record(raw_record):
   # The first byte represents the label, which we convert from uint8 to int32
   # and then to one-hot.
   label = tf.cast(record_vector[0], tf.int32)
-  label = tf.one_hot(label, _NUM_CLASSES)
+  label = tf.one_hot(label, num_classes)
 
   # The remaining bytes after the label represent the image, which we reshape
   # from [depth * height * width] to [depth, height, width].

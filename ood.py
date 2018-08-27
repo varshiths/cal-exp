@@ -29,16 +29,16 @@ def get_filenames(mode, data_dir, dataset):
   assert dataset in ["noise", "gnoise", "tin", "sun", "cifar10mix"], ('invalid dataset')
 
   if mode == 0:
-    datafile = os.path.join(data_dir, ood_dataset + '_ood_batch.bin')
+    datafile = os.path.join(data_dir, dataset + '_ood_batch.bin')
     assert os.path.exists(datafile), (
         'Run make_ood_data.py for train purposes first and copy it into the cifar-10-batches-bin directory.' )
     return [datafile]
 
   elif mode == 1:
-    datafile = os.path.join(data_dir, ood_dataset + '_ood_test_batch.bin')
+    datafile = os.path.join(data_dir, dataset + '_ood_test_batch.bin')
     assert os.path.exists(datafile), (
         'Run make_ood_data.py for test purposes first and copy it into the cifar-10-batches-bin directory.' )
     return [datafile]
 
   else:
-    raise ValueError("unknown mode %d", mode)
+    raise ValueError("unknown mode %d" % mode)

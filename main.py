@@ -126,11 +126,11 @@ def get_train_or_val(dataset, NDICT, is_validating):
     dataset = dataset.take(NDICT["train"])
   else:
     dataset = dataset.skip(NDICT["train"])
-  flag = int(is_validating); size = NDICT["validation"]*flag + NDICT["training"]*(1-flag)
+  flag = int(is_validating); size = NDICT["validation"]*flag + NDICT["train"]*(1-flag)
 
   return dataset, size
 
-def input_fn(mode, data_dir, ood_dataset, batch_size, num_epochs=1, is_validating=False):
+def input_fn(mode, data_dir, ood_dataset, batch_size, num_epochs=1, is_validating=False, hinged=False):
   """Input_fn using the tf.data input pipeline for CIFAR-10 dataset.
 
   Args:
@@ -155,17 +155,26 @@ def input_fn(mode, data_dir, ood_dataset, batch_size, num_epochs=1, is_validatin
   assert ( is_training or not is_validating ), ("Can't perform test and validation")
   assert (is_ood or is_main), ("Select at least one dataset.")
   
+  filenames = []
   ds_size, ods_size = 0, 0
   if is_main:
-    dataset = record_dataset(get_filenames(0 if is_training else 1, data_dir))
+    filename = get_filenames(0 if is_training else 1, data_dir)
+    filenames += filename
+    dataset = record_dataset(filename)
     ds_size = _NUM_IMAGES["test"]
     if is_training:
       dataset, ds_size = get_train_or_val(dataset, _NUM_IMAGES, is_validating)
   if is_ood:
-    ood_dataset = record_dataset(get_filenames(0 if is_training else 1, data_dir, ood_dataset))
+    filename = get_ood_filenames(0 if is_training else 1, data_dir, ood_dataset)
+    ood_dataset = record_dataset(filename)
+    filenames += filename
     ods_size = _NUM_IMAGES_OOD["test"]
     if is_training:
       ood_dataset, ods_size = get_train_or_val(ood_dataset, _NUM_IMAGES, is_validating)
+
+  # print("------------------------------")
+  # print("filenames: ", filenames)
+  # print("------------------------------")
 
   # merge the two datasets after train val split
   if not is_main:
@@ -179,7 +188,7 @@ def input_fn(mode, data_dir, ood_dataset, batch_size, num_epochs=1, is_validatin
     dataset = dataset.shuffle(
         buffer_size=ds_size
       )
-  dataset = dataset.map(parse_record)
+  dataset = dataset.map(lambda x: parse_record(x, _NUM_CLASSES + int(hinged)))
   dataset = dataset.map(
       lambda image, label: (preprocess_image(image, is_training and not is_validating), label))
 
@@ -303,7 +312,7 @@ def main(unused_argv):
           'hinged'      : FLAGS.hinged,
       })
 
-  if FLAGS.test == 0:
+  if FLAGS.test in [0, 1]:
     for _ in range(FLAGS.train_epochs // FLAGS.epochs_per_eval):
       tensors_to_log = {
         'learning_rate': 'learning_rate',
@@ -315,20 +324,19 @@ def main(unused_argv):
           tensors=tensors_to_log, every_n_iter=100)
 
       classifier.train(
-          input_fn=lambda: input_fn(0, FLAGS.data_dir, FLAGS.ood_dataset, FLAGS.batch_size, FLAGS.epochs_per_eval),
+          input_fn=lambda: input_fn(FLAGS.test, FLAGS.data_dir, FLAGS.ood_dataset, FLAGS.batch_size, FLAGS.epochs_per_eval, hinged=FLAGS.hinged),
           hooks=[logging_hook],
           )
 
       # Evaluate the model and print results
       eval_results = classifier.evaluate(
-          input_fn=lambda: input_fn(1, FLAGS.data_dir, FLAGS.ood_dataset, FLAGS.batch_size))
-      print(eval_results)
+          input_fn=lambda: input_fn(FLAGS.test, FLAGS.data_dir, FLAGS.ood_dataset, FLAGS.batch_size, is_validating=True, hinged=FLAGS.hinged))
+      # print(eval_results)
 
-  # elif FLAGS.test == 1 or FLAGS.test == 2:
   else:
     eval_results = classifier.evaluate(
-        input_fn=lambda: input_fn(FLAGS.test, FLAGS.data_dir, FLAGS.ood_dataset, FLAGS.batch_size))
-    print(eval_results)
+        input_fn=lambda: input_fn(FLAGS.test, FLAGS.data_dir, FLAGS.ood_dataset, FLAGS.batch_size, hinged=FLAGS.hinged))
+    # print(eval_results)
 
 if __name__ == '__main__':
   tf.logging.set_verbosity(tf.logging.INFO)

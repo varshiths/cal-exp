@@ -247,6 +247,7 @@ def cifar10_resnet_v2_generator(resnet_size, num_classes, data_format=None):
       raise ValueError('resnet_size must be 6n + 2 for resnetv2:', resnet_size)
     num_blocks = (resnet_size - 2) // 6
 
+  # print("Model: %d, %d, %d" % (resnet_size, k, num_blocks))
 
   if data_format is None:
     data_format = (
