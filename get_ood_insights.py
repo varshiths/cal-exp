@@ -15,6 +15,8 @@ import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument('--file_main', type=str, required=True,
                     help='The path to the output file for main model')
+parser.add_argument('--hinged', type=bool, default=False,
+                    help='Whether model outputs extra logit')
 parser.add_argument('--N', type=int, default=20,
                     help='Number of bins')
 args = parser.parse_args()
@@ -22,7 +24,10 @@ args = parser.parse_args()
 EPSILON=1e-7
 
 N = args.N
-_NCLASSES = 11
+if args.hinged:
+    _NCLASSES = 11
+else:
+    _NCLASSES = 10
 _OOD_CLASS = 10
 
 def transform_target_line(tline):
@@ -118,8 +123,12 @@ def main():
 
     mlogits_main = np.max(logits_main, axis=1)
 
-    ood_mask = targets == _OOD_CLASS
-    corr_mask = pred_main == targets
+    if "only" in args.file_main:
+        ood_mask = np.ones(mlogits_main.shape)
+        corr_mask = np.zeros(mlogits_main.shape)
+    else:
+        ood_mask = targets == _OOD_CLASS
+        corr_mask = pred_main == targets
 
     fmask = ood_mask.astype(np.float32)
     dmask = 1 - fmask
@@ -130,6 +139,18 @@ def main():
     print("Accuracy: ", accuracy)
     print("Detection: ", detection)
 
+    ood_logits = logits_main[np.where(fmask)]
+    id_logits = logits_main[np.where(dmask)]
+    if np.sum(fmask) != 0:
+
+        # import pdb; pdb.set_trace()
+
+        _min = np.mean(np.min(ood_logits, axis=1), axis=0)
+        _max = np.mean(np.max(ood_logits, axis=1), axis=0)
+        _mean = np.mean(np.mean(ood_logits, axis=1), axis=0)
+        _std = np.mean(np.std(ood_logits, axis=1), axis=0)
+
+        print("OOD: Min/Max/Mean/Std : %.2f/%.2f/%.2f/%.2f " % (_min, _max, _mean, _std))
 
     def get_acc_bucket(probs, preds, tgts, confint):
         # mask = (confint[0] <= probs and probs < confint[1]).astype(int)
@@ -174,7 +195,7 @@ def main():
     plt.plot(indices, accur, label="accuracy")
 
     plt.legend(loc="upper left")
-    plt.savefig("ood_hist.png")
+    plt.savefig("dump.png")
     # plt.show()
 
     # # plot histogram of confidences of outputs
