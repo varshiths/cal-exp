@@ -39,7 +39,7 @@ from ood import _NUM_IMAGES_OOD, get_filenames as get_ood_filenames
 parser = argparse.ArgumentParser()
 
 # Basic model parameters.
-parser.add_argument('--data_dir', type=str, default='cifar10_data',
+parser.add_argument('--dset', type=str, default='cifar10',
                     help='The path to the CIFAR-10 data directory.')
 
 parser.add_argument('--ood_dataset', type=str, default='',
@@ -53,9 +53,15 @@ parser.add_argument('--resnet_size', type=str, default="50",
                           '- if of the format int-int, then wide resnet model is used'
                           '- if of the format int, then resnet is used.')
 
-parser.add_argument('--hinged', type=bool, default=False,
-                    help= 'If an additional zero logit is to be added to the output'
-                          'of te model.')
+parser.add_argument('--lamb', type=float, default=1.0,
+                    help='The weight of the penalty to pull down logits.')
+
+parser.add_argument('--variant', type=str, default="none",
+                    help= 'What variant of the model is to be used.'
+                          'none   : plain model without a zero logit'
+                          'den    : extra loss is 1 / sum( 1 + exp( wrong logits) )'
+                          'num    : extra loss is sum( -1 * exp(wrong label) / normalizer )'
+                          'pen    : extra loss is penalty when mean sum of bottom logits is negative')
 
 parser.add_argument('--train_epochs', type=int, default=250,
                     help='The number of epochs to train.')
@@ -83,41 +89,11 @@ parser.add_argument('--ngpus', type=int, default=1,
 _WEIGHT_DECAY = 2e-4
 _MOMENTUM = 0.9
 
+EPSILON = 1e-10
+INF = 1e10
+_NUM_PEN_CLASSES = _NUM_CLASSES // 2
+
 _TRAIN_VAL_SPLIT_SEED = 0
-
-'''
-def get_filenames(mode, data_dir, ood_dataset):
-  """Returns a list of filenames."""
-  data_dir = os.path.join(data_dir, 'cifar-10-batches-bin')
-
-  assert os.path.exists(data_dir), (
-      'Run cifar10_download_and_extract.py first to download and extract the '
-      'CIFAR-10 data.')
-
-  if mode == 0:
-    datafile = []
-    # datafile = [os.path.join(data_dir, ood_dataset + '_ood_batch.bin')]
-    # assert os.path.exists(datafile), (
-        # 'Run make_ood_data.py for train purposes first and copy it into the cifar-10-batches-bin directory.' )
-    return [
-      os.path.join(data_dir, 'data_batch_%d.bin' % i)
-      for i in range(1, _NUM_DATA_FILES + 1)
-    ] + datafile
-
-  elif mode == 1:
-    datafile = os.path.join(data_dir, ood_dataset + '_ood_test_batch.bin')
-    assert os.path.exists(datafile), (
-        'Run make_ood_data.py for test purposes first and copy it into the cifar-10-batches-bin directory.' )
-    return [
-      os.path.join(data_dir, 'test_batch.bin')
-    ] + [datafile]
-
-  elif mode == 2:
-    datafile = os.path.join(data_dir, ood_dataset + '_ood_test_batch.bin')
-    assert os.path.exists(datafile), (
-        'Run make_ood_data.py for test purposes first and copy it into the cifar-10-batches-bin directory.' )
-    # return [datafile]
-'''
 
 def get_train_or_val(dataset, NDICT, is_validating):
   # first randomly shuffle the exact same way using the same constant seed
@@ -134,12 +110,12 @@ def get_train_or_val(dataset, NDICT, is_validating):
 
   return dataset, size
 
-def input_fn(mode, data_dir, ood_dataset, batch_size, num_epochs=1, is_validating=False, hinged=False):
-  """Input_fn using the tf.data input pipeline for CIFAR-10 dataset.
+def _cifar10_input_fn(mode, dset, ood_dataset, batch_size, num_epochs=1, is_validating=False, hinged=False):
+  """Input_fn using the tf.data input pipeline for datasets dataset.
 
   Args:
     mode: An int denoting whether the input is for training, test with the corresponding datasets
-    data_dir: The directory containing the input data.
+    dset: The directory containing the input data.
     ood_dataset: String pointing to a particular ood dataset.
     batch_size: The number of samples per batch.
     num_epochs: The number of epochs to repeat the dataset.
@@ -154,17 +130,20 @@ def input_fn(mode, data_dir, ood_dataset, batch_size, num_epochs=1, is_validatin
   assert ( is_training or not is_validating ), ("Can't perform test and validation")
   assert (is_ood or is_main), ("Select at least one dataset.")
   
+  # change name of dset to dir
+  dset += "_data"
+
   filenames = []
   ds_size, ods_size = 0, 0
   if is_main:
-    filename = get_filenames(0 if is_training else 1, data_dir)
+    filename = get_filenames(0 if is_training else 1, dset)
     filenames += filename
     dataset = record_dataset(filename)
     ds_size = _NUM_IMAGES["test"]
     if is_training:
       dataset, ds_size = get_train_or_val(dataset, _NUM_IMAGES, is_validating)
   if is_ood:
-    filename = get_ood_filenames(0 if is_training else 1, data_dir, ood_dataset)
+    filename = get_ood_filenames(0 if is_training else 1, dset, ood_dataset)
     ood_dataset = record_dataset(filename)
     filenames += filename
     ods_size = _NUM_IMAGES_OOD["test"]
@@ -206,6 +185,14 @@ def input_fn(mode, data_dir, ood_dataset, batch_size, num_epochs=1, is_validatin
 
   return images, labels
 
+def custom_softmax_cross_entropy(logits, labels):
+
+  scaled_logits = logits - tf.reduce_max(logits, axis=-1)
+  softmax = tf.nn.softmax(logits)
+
+  pdtp = -tf.reduce_sum(labels * tf.log( softmax + EPSILON ), axis=1)
+
+  return tf.reduce_mean(pdtp)
 
 def cifar10_model_fn(features, labels, mode, params):
   """Model function for CIFAR-10."""
@@ -218,7 +205,7 @@ def cifar10_model_fn(features, labels, mode, params):
   logits = network(inputs, mode == tf.estimator.ModeKeys.TRAIN)
 
   # adding logit 0 for NOTA
-  if params["hinged"]:
+  if params["variant"] != "none":
     logits = tf.pad( logits, [[0,0],[0, 1]], "CONSTANT")
 
   classes = tf.argmax(logits, axis=1)
@@ -235,12 +222,37 @@ def cifar10_model_fn(features, labels, mode, params):
   accuracy_sum = tf.summary.scalar("accuracy", accuracy)
 
   # Calculate loss, which includes softmax cross entropy and L2 regularization.
-  loss = tf.losses.softmax_cross_entropy(logits=logits, onehot_labels=labels)
-  # loss = tf.identity(loss, name="loss")
+  base_loss = tf.reduce_mean(
+    tf.nn.softmax_cross_entropy_with_logits_v2(logits=logits, labels=labels), 
+    name="base_loss"
+    )
+
+  lnfactor = 0
+  pvals = 1-labels; pvals = pvals/tf.reduce_sum(pvals, axis=-1, keepdims=True)
+  distr = tf.distributions.Categorical(probs=pvals)
+  neg_samples = tf.transpose(distr.sample( [_NUM_PEN_CLASSES] ))
+  mask = tf.one_hot(neg_samples, depth=_NUM_CLASSES+1, axis=1)
+  mask = tf.reduce_sum(mask, axis=(-1))
+
+  if params["variant"] == "den":
+    lnfactor = tf.reduce_mean(tf.log( 1 + tf.reduce_sum( tf.exp(logits) * mask, axis=1 ) ))
+
+  elif params["variant"] == "num":
+    lnfactor = -custom_softmax_cross_entropy(logits=logits, labels=mask) / _NUM_PEN_CLASSES
+
+  elif params["variant"] == "pen":
+    neg_logits_mean = tf.reduce_mean(mask * logits, axis=1)
+    lnfactor = tf.reduce_mean(tf.square(
+        tf.nn.softplus( -neg_logits_mean )
+      )) / (_NUM_PEN_CLASSES * 20)
+
+  loss = base_loss + params["lamb"] * lnfactor
+  loss = tf.identity(loss, name="loss_vec")
+  loss_sum = tf.summary.scalar("loss", loss)
 
   if mode == tf.estimator.ModeKeys.EVAL:
 
-    # printing stuff
+    # # printing stuff
     # loss = tf.Print(loss, [tf.argmax(labels, 1)], summarize=1000000, message='Targets')
     # loss = tf.Print(loss, [tf.argmax(logits, 1)], summarize=1000000, message='Predictions')
     # loss = tf.Print(loss, [tf.nn.softmax(logits)], summarize=1000000, message='Probs')
@@ -322,29 +334,22 @@ def main(unused_argv):
           'resnet_size' : FLAGS.resnet_size,
           'data_format' : aconfig["data_format"],
           'batch_size'  : FLAGS.batch_size,
-          'hinged'      : FLAGS.hinged,
+          'variant'     : FLAGS.variant,
           'model_dir'   : FLAGS.model_dir,
+          'lamb'        : FLAGS.lamb,
       },
       )
 
-  if FLAGS.test == 1 and not FLAGS.hinged:
+  input_fn = _cifar10_input_fn
+  _hinged_flag = FLAGS.variant != "none"
+
+  if FLAGS.test == 1 and not _hinged_flag:
     print(
       "WARNING: OOD dataset provided but no hinge, are you sure?",
       file=sys.stderr,
       )
 
   if FLAGS.test in [0, 1]:
-    # ts_hook = tf.train.SummarySaverHook(
-    #   save_steps=10,
-    #   output_dir="log/train",
-    #   scaffold=tf.train.Scaffold(summary_op=tf.summary.merge_all()),
-    # )
-    # es_hook = tf.train.SummarySaverHook(
-    #   save_steps=0,
-    #   output_dir="log/eval/",
-    #   scaffold=tf.train.Scaffold(summary_op=tf.summary.merge_all()),
-    #   )
-
     # tensors_to_log = {
     #   'accuracy': 'accuracy'
     # }
@@ -356,13 +361,13 @@ def main(unused_argv):
     for _ in range(FLAGS.train_epochs // FLAGS.epochs_per_eval):
 
       classifier.train(
-        input_fn=lambda: input_fn(FLAGS.test, FLAGS.data_dir, FLAGS.ood_dataset, FLAGS.batch_size, FLAGS.epochs_per_eval, hinged=FLAGS.hinged),
+        input_fn=lambda: input_fn(FLAGS.test, FLAGS.dset, FLAGS.ood_dataset, FLAGS.batch_size, FLAGS.epochs_per_eval, hinged=_hinged_flag),
         # hooks=[logging_hook],
         )
 
       # Evaluate the model and print results
       eval_results = classifier.evaluate(
-        input_fn=lambda: input_fn(FLAGS.test, FLAGS.data_dir, FLAGS.ood_dataset, FLAGS.batch_size, is_validating=True, hinged=FLAGS.hinged),
+        input_fn=lambda: input_fn(FLAGS.test, FLAGS.dset, FLAGS.ood_dataset, FLAGS.batch_size, is_validating=True, hinged=_hinged_flag),
         # hooks=[logging_hook]
         )
 
@@ -374,7 +379,7 @@ def main(unused_argv):
       every_n_iter=1,
     )
     eval_results = classifier.evaluate(
-      input_fn=lambda: input_fn(FLAGS.test, FLAGS.data_dir, FLAGS.ood_dataset, FLAGS.batch_size, hinged=FLAGS.hinged),
+      input_fn=lambda: input_fn(FLAGS.test, FLAGS.dset, FLAGS.ood_dataset, FLAGS.batch_size, hinged=_hinged_flag),
       hooks=[logging_hook]
       )
 

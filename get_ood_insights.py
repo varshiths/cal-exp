@@ -15,7 +15,7 @@ import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument('--file_main', type=str, required=True,
                     help='The path to the output file for main model')
-parser.add_argument('--hinged', type=bool, default=False,
+parser.add_argument('--hinged', type=bool, default=True,
                     help='Whether model outputs extra logit')
 parser.add_argument('--N', type=int, default=20,
                     help='Number of bins')
@@ -124,11 +124,11 @@ def main():
     mlogits_main = np.max(logits_main, axis=1)
 
     if "only" in args.file_main:
-        ood_mask = np.ones(mlogits_main.shape)
-        corr_mask = np.zeros(mlogits_main.shape)
-    else:
         ood_mask = targets == _OOD_CLASS
         corr_mask = pred_main == targets
+    else:
+        ood_mask = np.ones(mlogits_main.shape)
+        corr_mask = np.zeros(mlogits_main.shape)
 
     fmask = ood_mask.astype(np.float32)
     dmask = 1 - fmask
