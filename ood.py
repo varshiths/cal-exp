@@ -12,7 +12,7 @@ _NUM_IMAGES_OOD = {
   'test': 1000,
 }
 
-DATASETS = ["noise", "gnoise", "tin", "sun", "cifar10mix"]
+DATASETS = ["noise", "gnoise", "tin", "tinz", "sun", "cifar10mix"]
 
 def get_filenames(mode, data_dir, dataset):
   """Returns a list of filenames.

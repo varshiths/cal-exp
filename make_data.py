@@ -12,6 +12,7 @@ from random import shuffle
 import numpy as np
 
 import matplotlib.pyplot as plt
+import cv2
 
 # from ood import _HEIGHT, _WIDTH, _DEPTH, DATASETS, _NUM_IMAGES_OOD
 # from cifar10 import _NUM_CLASSES as cifar10classes
@@ -20,7 +21,7 @@ _HEIGHT = 32
 _WIDTH = 32
 _DEPTH = 3
 
-DATASETS = ["noise", "gnoise", "tin", "sun", "cifar10mix"]
+DATASETS = ["noise", "gnoise", "tin", "tinz", "sun", "cifar10mix"]
 
 _NUM_IMAGES_OOD = {
   'train': 4500,
@@ -71,7 +72,7 @@ def get_gaussian_random(args):
     labels = (np.ones(shape=(_N))*_OOD_CLASS).astype(np.uint8)
     return images[split:], labels[split:], images[:split], labels[:split]
 
-def get_tin(args):
+def get_tin(args, resize=False):
     _N = _NUM_IMAGES_OOD["train"] + _NUM_IMAGES_OOD["validation"] + _NUM_IMAGES_OOD["test"]
     split = _NUM_IMAGES_OOD["test"]
 
@@ -90,7 +91,11 @@ def get_tin(args):
         if len(image.shape) == 2:
             image = np.stack( [image]*3, axis=2 )
 
-        image = image[x:x+_HEIGHT,y:y+_WIDTH,:]
+        if resize:
+            image = cv2.resize(image, dsize=(_HEIGHT, _WIDTH))
+        else:
+            image = image[x:x+_HEIGHT,y:y+_WIDTH,:]
+
         images.append(image)
     images = np.stack(images)
     assert images.shape[0] == _N
@@ -145,6 +150,8 @@ def main(args):
         images, labels, images_t, labels_t = get_gaussian_random(args)
     elif args.dataset == "tin":
         images, labels, images_t, labels_t = get_tin(args)
+    elif args.dataset == "tinz":
+        images, labels, images_t, labels_t = get_tin(args, resize=True)
     elif args.dataset == "cifar10mix":
         images, labels, images_t, labels_t = get_mixed_cifar10(args)
     elif args.dataset == "sun":
