@@ -27,6 +27,7 @@ import sys
 from warnings import warn
 
 import tensorflow as tf
+import tensorflow_probability as tfp
 
 import resnet_model
 from mmce import *
@@ -61,7 +62,8 @@ parser.add_argument('--variant', type=str, default="none",
                           'none   : plain model without a zero logit'
                           'den    : extra loss is 1 / sum( 1 + exp( wrong logits) )'
                           'num    : extra loss is sum( -1 * exp(wrong label) / normalizer )'
-                          'pen    : extra loss is penalty when mean sum of bottom logits is negative')
+                          'pen    : extra loss is penalty when mean sum of bottom logits is negative'
+                          'cen    : extra loss is penalty to center the logits about origin')
 
 parser.add_argument('--train_epochs', type=int, default=250,
                     help='The number of epochs to train.')
@@ -221,7 +223,7 @@ def cifar10_model_fn(features, labels, mode, params):
   accuracy = tf.identity(accuracy[1], name="accuracy_vec")
   accuracy_sum = tf.summary.scalar("accuracy", accuracy)
 
-  # Calculate loss, which includes softmax cross entropy and L2 regularization.
+  # Calculate loss, which includes softmax cross entropy
   base_loss = tf.reduce_mean(
     tf.nn.softmax_cross_entropy_with_logits_v2(logits=logits, labels=labels), 
     name="base_loss"
@@ -229,7 +231,7 @@ def cifar10_model_fn(features, labels, mode, params):
 
   lnfactor = 0
   pvals = 1-labels; pvals = pvals/tf.reduce_sum(pvals, axis=-1, keepdims=True)
-  distr = tf.distributions.Categorical(probs=pvals)
+  distr = tfp.distributions.Categorical(probs=pvals)
   neg_samples = tf.transpose(distr.sample( [_NUM_PEN_CLASSES] ))
   mask = tf.one_hot(neg_samples, depth=_NUM_CLASSES+1, axis=1)
   mask = tf.reduce_sum(mask, axis=(-1))
@@ -245,6 +247,16 @@ def cifar10_model_fn(features, labels, mode, params):
     lnfactor = tf.reduce_mean(tf.square(
         tf.nn.softplus( -neg_logits_mean )
       )) / (_NUM_PEN_CLASSES * 20)
+
+  elif params["variant"] == "cen":
+
+    std = tf.get_variable(name="std_logits", shape=(1), initializer=tf.ones_initializer(), trainable=True)
+    distr = tfp.distributions.MultivariateNormalDiag(
+      loc=tf.zeros(_NUM_CLASSES+1),
+      scale_identity_multiplier=std,
+      )
+    probs = distr.prob(logits)
+    lnfactor = -tf.reduce_mean(tf.log(probs + EPSILON))
 
   loss = base_loss + params["lamb"] * lnfactor
   loss = tf.identity(loss, name="loss_vec")
