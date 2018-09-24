@@ -65,6 +65,7 @@ def cifar10_model_fn(features, labels, mode, params):
     lnfactor = tf.reduce_mean(tf.log( 1 + tf.reduce_sum( tf.exp(logits) * mask, axis=1 ) ))
 
   elif params["variant"] == "num":
+    # todo: update this accrding to the new custom
     lnfactor = -custom_softmax_cross_entropy(logits=logits, labels=mask) / _NUM_PEN_CLASSES
 
   elif params["variant"] == "pen":

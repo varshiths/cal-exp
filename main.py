@@ -28,9 +28,9 @@ from warnings import warn
 
 import tensorflow as tf
 
-from mmce import *
-
 from model_cifar10 import cifar10_model_fn
+from model_vib_cifar10 import cifar10_vib_model_fn
+
 from input_cifar10 import _cifar10_input_fn
 
 parser = argparse.ArgumentParser()
@@ -49,6 +49,10 @@ parser.add_argument('--resnet_size', type=str, default="50",
                     help= 'The size of the ResNet model to use.'
                           '- if of the format int-int, then wide resnet model is used'
                           '- if of the format int, then resnet is used.')
+
+parser.add_argument('--dim_z', type=int, default=100,
+                    help='The dimension of the variaational space Z.')
+
 
 parser.add_argument('--lamb', type=float, default=1.0,
                     help='The weight of the penalty to pull down logits.')
@@ -105,8 +109,13 @@ def main(unused_argv):
     # save_summary_steps=100,
     )
 
+  if FLAGS.variant == "viby":
+    model_fn = cifar10_vib_model_fn
+  else:
+    model_fn = cifar10_model_fn
+
   classifier = tf.estimator.Estimator(
-      model_fn=cifar10_model_fn, model_dir=FLAGS.model_dir, config=run_config,
+      model_fn=model_fn, model_dir=FLAGS.model_dir, config=run_config,
       params={
           'resnet_size' : FLAGS.resnet_size,
           'data_format' : aconfig["data_format"],
@@ -114,7 +123,7 @@ def main(unused_argv):
           'variant'     : FLAGS.variant,
           'model_dir'   : FLAGS.model_dir,
           'lamb'        : FLAGS.lamb,
-
+          'dim_z'       : FLAGS.dim_z,
           'predict'     : FLAGS.test not in [0, 1],
       },
       )
