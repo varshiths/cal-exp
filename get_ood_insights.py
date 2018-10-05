@@ -85,24 +85,22 @@ def main():
     pcmask = (preds == _OOD_CLASS).astype(np.float32)
     misdetection = np.sum(pcmask * (1-cmask)) / np.sum(pcmask)
 
-    print("Accuracy: ", accuracy if np.sum(1-omask) != 0 else "No samples")
-    print("Detection: ", detection if np.sum(omask) != 0 else "No samples")
-    print("Misdetection: ", misdetection if np.sum(pcmask) != 0 else "No samples")
+    print("Accuracy: ", 100*accuracy if np.sum(1-omask) != 0 else "No samples")
 
     distr_logits(logits, 1-omask, "IND")
     distr_logits(logits, omask, "OOD")
 
     # FPR at 95% TPR
     FPR, TPR, threshold = FPR_for_TPR(targets, probs, 0.95, tolerance=1e-3)
-    print("At TPR: %f, FPR: %f" % (TPR, FPR))
-    print("Detection Error: %f" % ( (1-TPR+FPR)/2 ))
+    print("At TPR: %f, FPR: %f" % (100*TPR, 100*FPR))
+    print("Detection Error: %f" % ( 100*(1-TPR+FPR)/2 ))
 
     roc = ROC(probs, targets)
-    print("AUROC: %f" % ( area_under(roc) ))
+    print("AUROC: %f" % ( 100*area_under(roc) ))
     prin = PR(probs, targets)
-    print("AUPR-IN: %f" % ( area_under(prin) ))
+    print("AUPR-IN: %f" % ( 100*area_under(prin) ))
     prout = PR(probs, targets, True)
-    print("AUPR-OUT: %f" % ( area_under(prout) ))
+    print("AUPR-OUT: %f" % ( 100*(1-area_under(prout)) ))
 
     # sns.lineplot(prout[:, 0], prout[:, 1]).get_figure().savefig("aupr_out.png")
 

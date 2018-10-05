@@ -75,12 +75,20 @@ def cifar10_vib_model_fn(features, labels, mode, params):
   loss_sum = tf.summary.scalar("loss", loss)
 
   # squeeze the _NUM_CLASSES dim
-  sample_z = tf.squeeze(distr_z.sample(), axis=1)
-  logits = logits_from_z(sample_z)
+  sample_z = distr_z.sample()
+  logits = logits_from_z(tf.squeeze(sample_z, axis=1))
   probs = tf.nn.softmax(logits, 1)
 
+  # ratio of e and m for the a particular input
+  # e_by_m = distr_z.prob(sample_z) / distr_prior_z.prob(sample_z)
   # sum over num classes
-  rate = tf.reduce_sum(kldivs * probs, axis=1, keep_dims=True)
+  # rate = tf.reduce_sum(e_by_m * 1, axis=1, keepdims=True)
+  rate = tf.sigmoid(tf.reduce_sum(kldivs * probs, axis=1, keepdims=True))
+
+  # loss = tf.Print(loss, [sample_z], message="E/M")
+  # loss = tf.Print(loss, [rate], message="Rate")
+  # loss = tf.Print(loss, [distr_z.prob(sample_z), distr_prior_z.prob(sample_z)], message="E/M")
+
 
   classes = tf.argmax(logits, axis=1)
   accuracy = tf.metrics.accuracy( tf.argmax(labels, axis=1), classes, name="accuracy_metric")
@@ -95,22 +103,24 @@ def cifar10_vib_model_fn(features, labels, mode, params):
     print_probs = tf.concat([probs, rate], axis=1)
     print_logits = tf.concat([logits, rate], axis=1)
 
+    hooks = [tf.train.SummarySaverHook(
+          summary_op=tf.summary.merge([accuracy_sum]),
+          output_dir=os.path.join(params["model_dir"], "eval_core"),
+          save_steps=1,
+          )]
+
     # # printing stuff if predict
     if params["predict"]:
       loss = tf.Print(loss, [print_labels], summarize=1000000, message='Targets')
       # loss = tf.Print(loss, [print_preds], summarize=1000000, message='Predictions')
       loss = tf.Print(loss, [print_probs], summarize=1000000, message='Probs')
       loss = tf.Print(loss, [print_logits], summarize=1000000, message='Logits')
+      hooks = []
 
-    hook = tf.train.SummarySaverHook(
-      summary_op=tf.summary.merge([accuracy_sum]),
-      output_dir=os.path.join(params["model_dir"], "eval_core"),
-      save_steps=1,
-      )
     return tf.estimator.EstimatorSpec(
       mode=mode,
       loss=loss,
-      evaluation_hooks=[hook],
+      evaluation_hooks=hooks,
       )
 
   if mode == tf.estimator.ModeKeys.TRAIN:

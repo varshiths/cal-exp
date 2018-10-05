@@ -125,6 +125,7 @@ def main(unused_argv):
           'lamb'        : FLAGS.lamb,
           'dim_z'       : FLAGS.dim_z,
           'predict'     : FLAGS.test not in [0, 1],
+          # 'predict'     : False,
       },
       )
 
