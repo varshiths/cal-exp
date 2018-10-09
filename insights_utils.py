@@ -18,3 +18,19 @@ def get_acc_bucket(probs, preds, tgts, confint):
     else:
         accuracy = np.sum((tgts == preds).astype(float)*mask) / np.sum(mask)
     return accuracy, np.sum(mask)
+
+def transform_line(tline, skey):
+    tline = tline[tline.index(skey)+len(skey):]
+    tline = tline.replace('][', ' ')
+    tline = tline.replace(']', '')
+    tline = tline.replace('[', '')
+    tline = tline.replace('\n', '')
+    tline = tline.split(' ')
+
+    tline = [float(x) for x in tline]
+    tline = np.array(tline)
+
+    return tline
+
+def sigmoid(x):
+    return 1 / (1 + np.exp(-x))

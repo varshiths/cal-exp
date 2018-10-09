@@ -1,10 +1,13 @@
+#!/usr/bin/python3
 
 import argparse
 import os
 import sys
 
+import numpy as np
 import tensorflow as tf
 
+from insights_utils import transform_line 
 from insights_utils import get_intervals, get_acc_bucket
 
 parser = argparse.ArgumentParser()
@@ -40,7 +43,7 @@ def get_tensors_from_file(filename):
     tsrsd = { x: np.concatenate(y, axis=0) for x, y in tsrsd.items() }
 
     targets = tsrsd[tensors_to_get[0]]
-    logits = tsrsd[tensors_to_get[2]]
+    logits = tsrsd[tensors_to_get[1]]
 
     # perform the required reshapes
     targets = targets
@@ -53,18 +56,18 @@ class TemperatureTrainer:
 
   def __init__(self):
 
-    self.logit = tf.placeholder(tf.float32, [None, _NCLASSES])
+    self.logit = tf.placeholder(tf.float32, [None, NCLASSES])
     self.target = tf.placeholder(tf.int32, [None])
     self.T = tf.Variable(0.93)
 
     self.loss = self.calculate_loss()
 
     opt = tf.train.AdagradOptimizer(5e-2)
-    self.train_opt = opt.minimize(loss)
+    self.train_opt = opt.minimize(self.loss)
 
   def calculate_loss(self):
 
-    slogits = self.T * self.logit
+    slogits = self.logit / self.T
     loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self.target, logits=slogits)
     return tf.reduce_mean(loss)
 
@@ -75,28 +78,29 @@ class TemperatureTrainer:
     dlogits = np.take(dlogits, perm, axis=0)
     return dtargets, dlogits
 
-  def train(dtargets, dlogits):
+  def train(self, dtargets, dlogits):
 
-    bs = args.batch_size
-    dtargets, dlogits = self.shuffle(dtargets, dlogits)
+    bs = FLAGS.batch_size
+    dtargets, dlogits = TemperatureTrainer.shuffle(dtargets, dlogits)
 
     sess = tf.Session()
     sess.run(tf.global_variables_initializer())
     sess.run(tf.local_variables_initializer())
 
-    for i in range(args.train_epochs):
-      for j in range(args.train_epochs // bs):
+    for i in range(FLAGS.train_epochs):
+      for j in range(FLAGS.train_epochs // bs):
         feed_dict = {}
         feed_dict[self.logit] = dlogits[j*bs:(j+1)*bs, :]
         feed_dict[self.target] = dtargets[j*bs:(j+1)*bs]
-        val_loss, val_T, _ = sess.run([loss, T, train_opt], feed_dict=feed_dict)
+        val_loss, val_T, _ = sess.run([self.loss, self.T, self.train_opt], feed_dict=feed_dict)
         print ('Loss, Temperature: ', val_loss, val_T)
 
 def main(unused_argv):
 
-  dtargets, dlogits = get_tensors_from_file(args.file)
-  model = TemperatureTrainer()
+  dtargets, dlogits = get_tensors_from_file(FLAGS.file)
+  dlogits = dlogits[:, :NCLASSES]
 
+  model = TemperatureTrainer()
   model.train(dtargets, dlogits)
 
 if __name__ == '__main__':

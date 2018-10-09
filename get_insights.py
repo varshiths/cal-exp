@@ -11,7 +11,7 @@ import seaborn as sns
 import argparse
 
 
-from get_ood_insights import transform_line 
+from insights_utils import transform_line 
 from insights_utils import get_intervals, get_acc_bucket
 
 

@@ -25,19 +25,6 @@ else:
     _NCLASSES = 10
 _OOD_CLASS = 10
 
-def transform_line(tline, skey):
-    tline = tline[tline.index(skey)+len(skey):]
-    tline = tline.replace('][', ' ')
-    tline = tline.replace(']', '')
-    tline = tline.replace('[', '')
-    tline = tline.replace('\n', '')
-    tline = tline.split(' ')
-
-    tline = [float(x) for x in tline]
-    tline = np.array(tline)
-
-    return tline
-
 tensors_to_get = ["Targets[", "Probs[", "Logits["]
 
 def get_tensors_from_file(filename):
