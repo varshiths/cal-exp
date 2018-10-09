@@ -1,218 +1,133 @@
+#!/usr/bin/python3
 
 import sys
 
 import matplotlib
 import matplotlib.pyplot as plt
 
-matplotlib.use('GTK')
-plt.style.use('ggplot')
-
 import numpy as np 
+import seaborn as sns
 
 import argparse
 
+
+from get_ood_insights import transform_line 
+from insights_utils import get_intervals, get_acc_bucket
+
+
 parser = argparse.ArgumentParser()
-parser.add_argument('--file_main', type=str, required=True,
+parser.add_argument('--file', type=str, required=True,
                     help='The path to the output file for main model')
-parser.add_argument('--file_base', type=str, required=True,
-                    help='The path to the output file for baseline model')
-parser.add_argument('--file_out', type=str, required=True,
-                    help='The name of the png file of hist')
-parser.add_argument('--temperature', type=float, default=1.0,
-                    help='The temperature to perform T scaling')
+parser.add_argument('--hinged', type=bool, default=True,
+                    help='Whether model outputs extra logit')
+parser.add_argument('--T', type=float, default=1.0,
+                    help='Temperature for T Scaling')
 parser.add_argument('--N', type=int, default=20,
-                    help='Number of bins')
+                    help='Number of buckets to measure calibration error')
 args = parser.parse_args()
 
 EPSILON=1e-7
 
 N = args.N
-_NCLASSES = 11
+NCLASSES = 10
+_NCLASSES = NCLASSES + int(args.hinged)
 
-def get_bin_num(val):
-    global N
-    val = min(int(val*N), N)
-    return val
+tensors_to_get = ["Targets[", "Probs[", "Logits["]
 
-def softmax(arr):
-    arr1 = arr - np.expand_dims(np.max(arr, 1), 1)
-    return np.exp(arr1)/np.expand_dims(np.sum(np.exp(arr1), 1), 1)
+def get_tensors_from_file(filename):
 
-def transform_target_line(tline):
-    tline = tline[tline.index('Targets[')+8:]
-    tline = tline.replace('][', ' ')
-    tline = tline.replace(']', '')
-    tline = tline.replace('[', '')
-    tline = tline.replace('\n', '')
-    tline = tline.split(' ')
-
-    tline = [int(x) for x in tline]
-    tline = np.array(tline)
-
-    return tline
-
-def transform_probs_line(pline):
-    pline = pline[pline.index('Probs[')+6:]
-    pline = pline.replace('][', ' ')
-    pline = pline.replace(']', '')
-    pline = pline.replace('[', '')
-    pline = pline.replace('\n', '')
-    pline = pline.split(' ')
-    pline = [float(x) for x in pline]
-    
-    pline = np.array(pline)
-    pline = np.reshape(pline, [-1, _NCLASSES])
-
-    return pline
-
-def transform_logits_line(lline):
-    lline = lline[lline.index('Logits[')+7:]
-    lline = lline.replace('][', ' ')
-    lline = lline.replace(']', '')
-    lline = lline.replace('[', '')
-    lline = lline.replace('\n', '')
-    lline = lline.split(' ')
-    lline = [float(x) for x in lline]
-    
-    lline = np.array(lline)
-    lline = np.reshape(lline, [-1, _NCLASSES])
-
-    return lline
-
-def transform_features_line(lline):
-    lline = lline[lline.index('Features[')+9:]
-    lline = lline.replace('][', ' ')
-    lline = lline.replace(']', '')
-    lline = lline.replace('[', '')
-    lline = lline.replace('\n', '')
-    lline = lline.split(' ')
-    lline = [float(x) for x in lline]
-    
-    lline = np.array(lline)
-    lline = np.reshape(lline, [-1, 32, 32])
-
-    return lline
-
-
-def get_targets_and_probs_from_file(filename):
-    targets = []
-    probs = []
-    logits = []
-    features = []
+    tsrsd = {}
+    for tsr in tensors_to_get:
+        tsrsd[tsr] = []
 
     with open(filename, 'r') as f:
         line = f.readline()
         while line:
-            if 'Targets' in line:
-                targets.append(transform_target_line(line))
-            if 'Probs' in line:
-                probs.append(transform_probs_line(line))
-            if 'Logits' in line:
-                logits.append(transform_logits_line(line))
-            # if 'Features' in line:
-            #     features.append(transform_features_line(line))
+            for tsr in tensors_to_get:
+                if tsr in line:
+                    tsrsd[tsr].append(transform_line(line, tsr))
             line = f.readline()
 
-    targets = np.concatenate(targets, axis=0)
-    probs = np.concatenate(probs, axis=0)
-    logits = np.concatenate(logits, axis=0)
-    # features = np.concatenate(features, axis=0)
+    tsrsd = { x: np.concatenate(y, axis=0) for x, y in tsrsd.items() }
+
+    targets = tsrsd[tensors_to_get[0]]
+    probs = tsrsd[tensors_to_get[1]]
+    logits = tsrsd[tensors_to_get[2]]
+
+    # perform the required reshapes
+    targets = targets
+    probs = np.reshape(probs, [-1, _NCLASSES])
+    logits = np.reshape(logits, [-1, _NCLASSES])
 
     assert targets.shape[0] == probs.shape[0], "corrupt: %s" % filename
-    # return targets, probs, logits, features
-    return targets, probs, logits, None
+    return targets, probs, logits
 
 def main():
 
-    mmce_list = []
-    correct_list = []
-    baseline_list = []
-    #baseline_temp_list = []
-    mmce_prob_values = []
-    baseline_prob_values = []
-    baseline_temp_prob_values = []
+    targets, probs, logits = get_tensors_from_file(args.file)
 
-    targets, probs_base, logits_base, features = get_targets_and_probs_from_file(args.file_base)
-    _targets, probs_main, logits_main, _ = get_targets_and_probs_from_file(args.file_main)
+    probs = probs[:, :NCLASSES]
 
-    assert (targets == _targets).all(), "base and main are not run on the same set"
+    preds = np.argmax(probs, axis=1)
+    mprobs = np.max(probs, axis=1)
+    mlogits = np.max(logits, axis=1)
+    # after T Scaling
+    mprobsT = np.max(probs/T, axis=1)
 
-    pred_base = np.argmax(probs_base, axis=1)
-    mprobs_base = np.max(probs_base, axis=1)
-    # temperature scaling for base line to manage calibration
-    # to correct
-    mprobs_base_t = np.max(probs_base, axis=1)
+    accur, freq, confs = get_accuracies_and_frequencies(mprobs, preds, targets, N)
+    accurT, freqT, _ = get_accuracies_and_frequencies(mprobsT, preds, targets, N)
 
-    pred_main = np.argmax(probs_main, axis=1)
-    mprobs_main = np.max(probs_main, axis=1)
+    ece  = get_ece(mprobs, preds, targets, N)
+    eceT = get_ece(mprobsT, preds, targets, N)
 
-    mlogits_base = np.max(logits_base, axis=1)
-    mlogits_main = np.max(logits_main, axis=1)
+    print("ECE: BIN   : %f" % (ece*100))
+    print("ECE: BIN+T : %f" % (eceT*100))
 
-    # with open("log_file.txt", "w") as f:
-    #     for i in range(10000):
-    #         f.write(str(correct_list[i]) + ' ' + str(mmce_list[i]) + ' ' + str(baseline_list[i]) + ' ' + str(mmce_prob_values[i]) + ' ' + str(baseline_prob_values[i]) + ' ' + str(baseline_temp_prob_values[i]) + '\n')
+    # plot_calibration_graphs(accur, freq, accurT, freqT, confs)
+    pass
 
-    # ch_base = np.sum(mprobs_base >= 0.99)
-    # ch_base_t = np.sum(mprobs_base_t >= 0.99)
-    # ch_main = np.sum(mprobs_main >= 0.99)
-    # print ('Baseline:       ', ch_base)
-    # print ('Baseline + T:   ', ch_base_t)
-    # print ('Main:           ', ch_main)
+def get_ece(confs, preds, targets, N):
 
-    def get_acc_bucket(probs, preds, tgts, confint):
-        # mask = (confint[0] <= probs and probs < confint[1]).astype(int)
-        mask = np.logical_and(confint[0] <= probs, probs < confint[1]).astype(int)
-        if np.sum(mask) == 0:
-            accuracy = None
-        else:
-            accuracy = np.sum((tgts == preds).astype(float)*mask) / np.sum(mask)
-        return accuracy, np.sum(mask)
+    et = 0
+    for cint in get_intervals(N)[0]:
+        mask = np.logical_and(cint[0] <= confs, confs < cint[1]).astype(int)
+        et += np.absolute(np.sum(((targets == preds).astype(float) - confs)*mask))
 
-    def get_acc(prob_list, tgt_list, pred_list):
-        avg_accuracy = (np.array(prob_list) >= 0.99)*(np.array(tgt_list) == np.array(pred_list))
-        return np.sum(avg_accuracy)
+    return et / confs.shape[0]
 
-    def get_intervals(N):
-        int0 = np.arange(N)
-        int1 = int0+1
-        ints = np.stack([int0, int1], axis=1)/N
-        return ints, int0
+def get_accuracies_and_frequencies(mprobs, preds, targets, N):
 
-    ints, indices = get_intervals(args.N)
-    indices = indices/N
-    accur = np.zeros(args.N)
-    freq_base = np.zeros(args.N)
-    freq_main = np.zeros(args.N)
+    ints, indices = get_intervals(N)
+    accur = np.zeros(N)
+    freq = np.zeros(N)
+
+    for i, cint in enumerate(ints):
+        tp = get_acc_bucket(mprobs, preds, targets, cint)
+        accur[i] = tp[0]
+        freq[i] = tp[1]
+
+    return accur, freq, indices/N
+
+def plot_calibration_graphs(accur, freq, accurT, freqT, confs):
+
+    # plot accuracies in buckets of confidences
     plt.figure()
     plt.xlim(-0.02, 1.02)
     plt.ylim(-0.02, 1.02)
-
-    # baseline, indices=indices
-    plt.plot(indices, indices, label="reference")
-    
-    for i in range(ints.shape[0]):
-        accur[i], freq_base[i] = get_acc_bucket(mprobs_base, pred_base, targets, ints[i])
-    plt.plot(indices, accur, label="baseline")
-
-    for i in range(ints.shape[0]):
-        accur[i], freq_main[i] = get_acc_bucket(mprobs_main, pred_main, targets, ints[i])
-    plt.plot(indices, accur, label="main")
-
+    plt.plot(confs, confs, label="Reference")
+    plt.plot(confs, accur, label="BIN")
+    plt.plot(confs, accurT, label="BIN+T")
     plt.legend(loc="upper left")
-    plt.savefig(args.file_out)
-    # plt.show()
+    plt.savefig("cala.png")
 
     # plot histogram of confidences of outputs
     fig = plt.figure()
-
-    # fig.add_subplot(2, 1, 1)
-    plt.plot(indices, freq_base / np.sum(freq_base), label="baseline")
-    # fig.add_subplot(2, 1, 2)
-    plt.plot(indices, freq_main / np.sum(freq_main), label="main")
+    plt.xlim(-0.02, 1.02)
+    plt.ylim(-0.02, 1.02)
+    plt.plot(confs, freq / np.sum(freq), label="BIN")
+    plt.plot(confs, freqT / np.sum(freqT), label="BIN+T")
     plt.legend(loc="upper left")
-
-    plt.savefig("hist_" + args.file_out)
+    plt.savefig("calf.png")
 
 if __name__ == '__main__':
     main()
