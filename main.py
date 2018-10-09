@@ -86,6 +86,8 @@ parser.add_argument('--test', type=int, default=0,
                           '2: test; main dataset'
                           '3: test; ood dataset'
                           '4: test; main dataset + ood dataset'
+                          '5: validate; main dataset'
+                          '6: validate; ood dataset'
                           )
 
 parser.add_argument('--ngpus', type=int, default=1,
@@ -169,7 +171,7 @@ def main(unused_argv):
         # hooks=[logging_hook]
         )
 
-  else:
+  elif FLAGS.test in [2, 3, 4]:
     logging_hook = tf.train.LoggingTensorHook(
       tensors={
         "accuracy": "accuracy",
@@ -178,6 +180,13 @@ def main(unused_argv):
     )
     eval_results = classifier.evaluate(
       input_fn=lambda: input_fn(FLAGS.test, FLAGS.dset, FLAGS.ood_dataset, FLAGS.batch_size, hinged=_hinged_flag),
+      # hooks=[logging_hook]
+      )
+
+  elif FLAGS.test in [5, 6]:
+    # Evaluate the model and print results along with logits and targets for t scaling
+    eval_results = classifier.evaluate(
+      input_fn=lambda: input_fn(FLAGS.test, FLAGS.dset, FLAGS.ood_dataset, FLAGS.batch_size, is_validating=True, hinged=_hinged_flag),
       # hooks=[logging_hook]
       )
 

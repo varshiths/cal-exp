@@ -36,11 +36,10 @@ def _cifar10_input_fn(mode, dset, ood_dataset, batch_size, num_epochs=1, is_vali
   Returns:
     A tuple of images and labels.
   """
-  is_training = mode in [0, 1]
-  is_ood = mode in [1, 3, 4]
-  is_main = mode in [0, 1, 2, 4]
+  is_training = mode in [0, 1, 5, 6]
+  is_ood = mode in [1, 3, 4, 6]
+  is_main = mode in [0, 1, 2, 4, 5]
 
-  assert ( is_training or not is_validating ), ("Can't perform test and validation")
   assert (is_ood or is_main), ("Select at least one dataset.")
   
   # change name of dset to dir
@@ -61,7 +60,7 @@ def _cifar10_input_fn(mode, dset, ood_dataset, batch_size, num_epochs=1, is_vali
     filenames += filename
     ods_size = _NUM_IMAGES_OOD["test"]
     if is_training:
-      ood_dataset, ods_size = get_train_or_val(ood_dataset, _NUM_IMAGES, is_validating)
+      ood_dataset, ods_size = get_train_or_val(ood_dataset, _NUM_IMAGES_OOD, is_validating)
 
   print("------------------------------")
   print("filenames: ", filenames)
