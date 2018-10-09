@@ -30,6 +30,7 @@ import tensorflow as tf
 
 from model_cifar10 import cifar10_model_fn
 from model_vib_cifar10 import cifar10_vib_model_fn
+from model_bin_cifar10 import cifar10_bin_model_fn
 
 from input_cifar10 import _cifar10_input_fn
 
@@ -53,6 +54,10 @@ parser.add_argument('--resnet_size', type=str, default="50",
 parser.add_argument('--dim_z', type=int, default=100,
                     help='The dimension of the variaational space Z.')
 
+parser.add_argument('--pen_prob', type=float, default=0.5,
+                    help='The dimension of the variaational space Z.')
+parser.add_argument('--cutoff_weight', type=float, default=0.1,
+                    help='The dimension of the variaational space Z.')
 
 parser.add_argument('--lamb', type=float, default=1.0,
                     help='The weight of the penalty to pull down logits.')
@@ -111,20 +116,24 @@ def main(unused_argv):
 
   if FLAGS.variant == "viby":
     model_fn = cifar10_vib_model_fn
+  elif FLAGS.variant == "bin":
+    model_fn = cifar10_bin_model_fn
   else:
     model_fn = cifar10_model_fn
 
   classifier = tf.estimator.Estimator(
       model_fn=model_fn, model_dir=FLAGS.model_dir, config=run_config,
       params={
-          'resnet_size' : FLAGS.resnet_size,
-          'data_format' : aconfig["data_format"],
-          'batch_size'  : FLAGS.batch_size,
-          'variant'     : FLAGS.variant,
-          'model_dir'   : FLAGS.model_dir,
-          'lamb'        : FLAGS.lamb,
-          'dim_z'       : FLAGS.dim_z,
-          'predict'     : FLAGS.test not in [0, 1],
+          'resnet_size'   : FLAGS.resnet_size,
+          'data_format'   : aconfig["data_format"],
+          'batch_size'    : FLAGS.batch_size,
+          'variant'       : FLAGS.variant,
+          'model_dir'     : FLAGS.model_dir,
+          'lamb'          : FLAGS.lamb,
+          'dim_z'         : FLAGS.dim_z,
+          'pen_prob'      : FLAGS.pen_prob,
+          'cutoff_weight' : FLAGS.cutoff_weight,
+          'predict'       : FLAGS.test not in [0, 1],
           # 'predict'     : False,
       },
       )
