@@ -55,7 +55,7 @@ def main():
     prin = PR(rate, itargets)
     print("AUPR-IN: %f" % ( 100*area_under(prin) ))
     prout = PR(rate, itargets, reverse=True)
-    print("AUPR-OUT: %f" % ( 100*(1-area_under(prout)) ))
+    print("AUPR-OUT: %f" % ( 100*area_under(prout) ))
 
     distr_rates(rate, 1-omask, "IND")
     distr_rates(rate, omask, "OOD")
@@ -65,7 +65,7 @@ def main():
         100*(1-TPR+FPR)/2, 
         100*area_under(roc),
         100*area_under(prin),
-        100*(1-area_under(prout)),
+        100*area_under(prout),
         ))
 
     # resrict to in class by using imask = 1-omask
@@ -83,6 +83,8 @@ def main():
     accurT, freqT, _ = get_accuracies_and_frequencies(targets, 1-omask, preds, confsT, args.N)
     # assert all examples have been included
     assert np.sum(1-omask) == np.sum(freq)
+
+    # import pdb; pdb.set_trace()
     plot_calibration_graphs(accur, freq, accurT, freqT, iconfs)
 
 if __name__ == '__main__':
