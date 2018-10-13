@@ -1,6 +1,7 @@
 
 import numpy as np
 
+IEPSILON = 0.01
 EPSILON = 1e-10
 INF = 1e10
 
@@ -8,6 +9,11 @@ def get_intervals(N):
     int0 = np.arange(N)
     int1 = int0+1
     ints = np.stack([int0, int1], axis=1)/N
+
+    # shifting the ends slightly to add extremes
+    ints[0][0] += -IEPSILON
+    ints[-1][1] += IEPSILON
+
     return ints, int0
 
 def get_acc_bucket(probs, preds, tgts, confint):
@@ -35,7 +41,7 @@ def transform_line(tline, skey):
 def sigmoid(x):
     return 1 / (1 + np.exp(-x))
 
-def get_tensors_from_file(filename, tensors_to_get, nclasses):
+def get_tensors_from_file(filename, tensors_to_get, nclasses, num_non_reshape=1):
 
     tsrsd = {}
     for tsr in tensors_to_get:
@@ -58,9 +64,8 @@ def get_tensors_from_file(filename, tensors_to_get, nclasses):
 
     # perform the required reshapes
     # usually targets
-    anss[0] = anss[0]
 
-    for i in range(1, len(anss)):
+    for i in range(num_non_reshape, len(anss)):
         anss[i] = np.reshape(anss[i], [-1, nclasses])
 
     assert anss[0].shape[0] == anss[1].shape[0], "corrupt: %s" % filename

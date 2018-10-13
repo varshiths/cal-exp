@@ -35,7 +35,7 @@ def cifar10_bin_model_fn(features, labels, mode, params):
   loss = tf.identity(loss, name="loss_vec")
   loss_sum = tf.summary.scalar("loss", loss)
 
-  rate = tf.reduce_max(probs, axis=1, keepdims=True)
+  rate = tf.reduce_max(probs, axis=1)
 
   # loss = tf.Print(loss, [smask], summarize=100, message="smask: ")
   # loss = tf.Print(loss, [tf.reduce_mean(probs)], summarize=100, message="mean: ")
@@ -49,11 +49,11 @@ def cifar10_bin_model_fn(features, labels, mode, params):
 
   if mode == tf.estimator.ModeKeys.EVAL or params["predict"]:
 
-    # print
-    print_labels = tf.argmax(labels, 1)
-    # print_preds = tf.argmax(logits, 1)
-    print_probs = tf.concat([probs, rate], axis=1)
-    print_logits = tf.concat([logits, rate], axis=1)
+    # print # note this is labels not clabels
+    print_labels = tf.argmax(labels, axis=1)
+    print_rate = rate
+    print_probs = probs
+    print_logits = logits
 
     hooks = [tf.train.SummarySaverHook(
           summary_op=tf.summary.merge([accuracy_sum]),
@@ -64,7 +64,7 @@ def cifar10_bin_model_fn(features, labels, mode, params):
     # # printing stuff if predict
     if params["predict"]:
       loss = tf.Print(loss, [print_labels], summarize=1000000, message='Targets')
-      # loss = tf.Print(loss, [print_preds], summarize=1000000, message='Predictions')
+      loss = tf.Print(loss, [print_rate], summarize=1000000, message='Rate')
       loss = tf.Print(loss, [print_probs], summarize=1000000, message='Probs')
       loss = tf.Print(loss, [print_logits], summarize=1000000, message='Logits')
       hooks = []

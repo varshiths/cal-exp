@@ -24,33 +24,6 @@ parser.add_argument('--batch_size', type=int, default=10,
 NCLASSES = 10
 _NCLASSES = NCLASSES + 1
 
-tensors_to_get = ["Targets[", "Logits["]
-
-def get_tensors_from_file(filename):
-
-    tsrsd = {}
-    for tsr in tensors_to_get:
-        tsrsd[tsr] = []
-
-    with open(filename, 'r') as f:
-        line = f.readline()
-        while line:
-            for tsr in tensors_to_get:
-                if tsr in line:
-                    tsrsd[tsr].append(transform_line(line, tsr))
-            line = f.readline()
-
-    tsrsd = { x: np.concatenate(y, axis=0) for x, y in tsrsd.items() }
-
-    targets = tsrsd[tensors_to_get[0]]
-    logits = tsrsd[tensors_to_get[1]]
-
-    # perform the required reshapes
-    targets = targets
-    logits = np.reshape(logits, [-1, _NCLASSES])
-
-    assert targets.shape[0] == logits.shape[0], "corrupt: %s" % filename
-    return targets, logits
 
 class TemperatureTrainer:
 
@@ -97,7 +70,8 @@ class TemperatureTrainer:
 
 def main(unused_argv):
 
-  dtargets, dlogits = get_tensors_from_file(FLAGS.file)
+  tensors_to_get = ["Targets[", "Logits["]
+  dtargets, dlogits = get_tensors_from_file(FLAGS.file, tensors_to_get, NCLASSES)
   dlogits = dlogits[:, :NCLASSES]
 
   model = TemperatureTrainer()
