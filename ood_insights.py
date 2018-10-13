@@ -1,95 +1,5 @@
-#!/usr/bin/python3
 
-import sys
-
-import matplotlib
-import matplotlib.pyplot as plt
-
-import numpy as np 
-import seaborn as sns
-
-import argparse
-
-parser = argparse.ArgumentParser()
-parser.add_argument('--file', type=str, required=True,
-                    help='The path to the output file for main model')
-parser.add_argument('--hinged', type=bool, default=True,
-                    help='Whether model outputs extra logit')
-args = parser.parse_args()
-
-EPSILON=1e-7
-
-if args.hinged:
-    _NCLASSES = 11
-else:
-    _NCLASSES = 10
-_OOD_CLASS = 10
-
-tensors_to_get = ["Targets[", "Probs[", "Logits["]
-
-def get_tensors_from_file(filename):
-
-    tsrsd = {}
-    for tsr in tensors_to_get:
-        tsrsd[tsr] = []
-
-    with open(filename, 'r') as f:
-        line = f.readline()
-        while line:
-            for tsr in tensors_to_get:
-                if tsr in line:
-                    tsrsd[tsr].append(transform_line(line, tsr))
-            line = f.readline()
-
-    tsrsd = { x: np.concatenate(y, axis=0) for x, y in tsrsd.items() }
-
-    targets = tsrsd[tensors_to_get[0]]
-    probs = tsrsd[tensors_to_get[1]]
-    logits = tsrsd[tensors_to_get[2]]
-
-    # perform the required reshapes
-    targets = targets
-    probs = np.reshape(probs, [-1, _NCLASSES])
-    logits = np.reshape(logits, [-1, _NCLASSES])
-
-    assert targets.shape[0] == probs.shape[0], "corrupt: %s" % filename
-    return targets, probs, logits
-
-def main():
-
-    targets, probs, logits = get_tensors_from_file(args.file)
-
-    preds = np.argmax(probs, axis=1)
-    mprobs = np.max(probs, axis=1)
-    mlogits = np.max(logits, axis=1)
-
-    omask = (targets == _OOD_CLASS).astype(np.float32)
-    cmask = (preds == targets).astype(np.float32)
-
-    accuracy = np.sum(cmask * (1-omask)) / np.sum(1-omask)
-    detection = np.sum(cmask * omask) / np.sum(omask)
-
-    pcmask = (preds == _OOD_CLASS).astype(np.float32)
-    misdetection = np.sum(pcmask * (1-cmask)) / np.sum(pcmask)
-
-    print("Accuracy: ", 100*accuracy if np.sum(1-omask) != 0 else "No samples")
-
-    distr_logits(logits, 1-omask, "IND")
-    distr_logits(logits, omask, "OOD")
-
-    # FPR at 95% TPR
-    FPR, TPR, threshold = FPR_for_TPR(targets, probs, 0.95, tolerance=1e-3)
-    print("At TPR: %f, FPR: %f" % (100*TPR, 100*FPR))
-    print("Detection Error: %f" % ( 100*(1-TPR+FPR)/2 ))
-
-    roc = ROC(probs, targets)
-    print("AUROC: %f" % ( 100*area_under(roc) ))
-    prin = PR(probs, targets)
-    print("AUPR-IN: %f" % ( 100*area_under(prin) ))
-    prout = PR(probs, targets, True)
-    print("AUPR-OUT: %f" % ( 100*(1-area_under(prout)) ))
-
-    # sns.lineplot(prout[:, 0], prout[:, 1]).get_figure().savefig("aupr_out.png")
+import numpy as np
 
 def area_under(_points):
     points = _points.copy()
@@ -171,12 +81,19 @@ def FPR_for_TPR(targets, probs, rate, tolerance=1e-3):
     # function that guides thresh 1-TPR
     def binary_thresh_search(l, r, func, val):
         mid = l+(r-l)/2
+        # print(mid, func(mid), val)
         if abs(func(mid) - val) < tolerance:
             return mid
-        elif func(mid) > val:
-            return binary_thresh_search(l, mid, func, val)
         else:
-            return binary_thresh_search(mid, r, func, val)
+            try:
+                if func(mid) > val:
+                    return binary_thresh_search(l, mid, func, val)
+                else:
+                    return binary_thresh_search(mid, r, func, val)
+            except Exception as e:
+                print("Warning:", e)
+                print("Threshold:", mid)
+                return mid
 
     threshold = binary_thresh_search(l=0, r=1, func=lambda x: 1-TPR(probs, targets, x), val=1-rate)
     return FPR(probs, targets, threshold), TPR(probs, targets, threshold), threshold
@@ -192,6 +109,3 @@ def distr_logits(logits, mask, name):
         print("%s: Min, Max, Mean, Std : %.2f, %.2f, %.2f, %.2f " % (name, _min, _max, _mean, _std))
     else:
         print("%s: No Samples" % (name))
-
-if __name__ == '__main__':
-    main()

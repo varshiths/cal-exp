@@ -15,10 +15,10 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--file', type=str, default='/tmp/cifar10_model',
                     help='The directory where the model will be stored.')
 
-parser.add_argument('--train_epochs', type=int, default=128,
+parser.add_argument('--train_epochs', type=int, default=2000,
                     help='The number of epochs to train.')
 
-parser.add_argument('--batch_size', type=int, default=128,
+parser.add_argument('--batch_size', type=int, default=10,
                     help='The number of images per batch.')
 
 NCLASSES = 10
@@ -67,7 +67,7 @@ class TemperatureTrainer:
 
   def calculate_loss(self):
 
-    slogits = self.logit / self.T
+    slogits = self.logit * self.T
     loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self.target, logits=slogits)
     return tf.reduce_mean(loss)
 
