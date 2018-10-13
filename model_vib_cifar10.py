@@ -83,7 +83,12 @@ def cifar10_vib_model_fn(features, labels, mode, params):
   # e_by_m = distr_z.prob(sample_z) / distr_prior_z.prob(sample_z)
   # sum over num classes
   # rate = tf.reduce_sum(e_by_m * 1, axis=1, keepdims=True)
-  rate = tf.sigmoid(tf.reduce_sum(kldivs * probs, axis=1, keepdims=True))
+  # kl = 0 implies in distribution and kl->inf implies out of distr
+  # rate = exp(-kl) implies in distr if rate = 1
+
+  rate = tf.exp(
+      -tf.reduce_sum(kldivs * probs, axis=1)
+    )
 
   # loss = tf.Print(loss, [sample_z], message="E/M")
   # loss = tf.Print(loss, [rate], message="Rate")
@@ -99,9 +104,9 @@ def cifar10_vib_model_fn(features, labels, mode, params):
 
     # print
     print_labels = tf.argmax(labels, 1)
-    # print_preds = tf.argmax(logits, 1)
-    print_probs = tf.concat([probs, rate], axis=1)
-    print_logits = tf.concat([logits, rate], axis=1)
+    print_rate = rate
+    print_probs = probs
+    print_logits = logits
 
     hooks = [tf.train.SummarySaverHook(
           summary_op=tf.summary.merge([accuracy_sum]),
@@ -112,7 +117,7 @@ def cifar10_vib_model_fn(features, labels, mode, params):
     # # printing stuff if predict
     if params["predict"]:
       loss = tf.Print(loss, [print_labels], summarize=1000000, message='Targets')
-      # loss = tf.Print(loss, [print_preds], summarize=1000000, message='Predictions')
+      loss = tf.Print(loss, [print_rate], summarize=1000000, message='Rate')
       loss = tf.Print(loss, [print_probs], summarize=1000000, message='Probs')
       loss = tf.Print(loss, [print_logits], summarize=1000000, message='Logits')
       hooks = []
