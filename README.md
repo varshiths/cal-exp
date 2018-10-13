@@ -6,8 +6,17 @@ The current models available are
 - ResNet  
 - WideResNet  
 
-The current datasets available are  
+The modification available are  
+- VIB  
+- Confidence  
+- Temperature Scaling  
+- Softmax-less Classification  
+
+The current datasets available either in the in/out form are  
 - cifar10  
+- MNIST  
+- Gaussian Noise  
+- Tiny Image Net (cropped, resized)  
 
 ## Setup  
 
