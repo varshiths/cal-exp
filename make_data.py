@@ -21,7 +21,7 @@ _HEIGHT = 32
 _WIDTH = 32
 _DEPTH = 3
 
-DATASETS = ["noise", "gnoise", "tin", "tinz", "sun", "cifar10mix"]
+DATASETS = ["noise", "gnoise", "tin", "tinz", "lsun", "lsunz", "cifar10mix"]
 
 _NUM_IMAGES_OOD = {
   'train': 4500,
@@ -105,6 +105,39 @@ def get_tin(args, resize=False):
     images, labels = images.astype(np.uint8), labels.astype(np.uint8)
     return images[split:], labels[split:], images[:split], labels[:split]
 
+def get_lsun(args, resize=False):
+    _N = _NUM_IMAGES_OOD["train"] + _NUM_IMAGES_OOD["validation"] + _NUM_IMAGES_OOD["test"]
+    split = _NUM_IMAGES_OOD["test"]
+
+    directory = os.path.join(args.source_data_dir, 'lsun')
+    files = os.listdir(directory)
+    shuffle(files)
+    files = files[:_N]
+
+    images = []
+    for i, file in enumerate(files):
+        print(i, file)
+        file = os.path.join(directory, file)
+        image = plt.imread(file)
+
+        x, y = np.random.randint(0, 32, 2)
+        if len(image.shape) == 2:
+            image = np.stack( [image]*3, axis=2 )
+
+        if resize:
+            image = cv2.resize(image, dsize=(_HEIGHT, _WIDTH))
+        else:
+            image = image[x:x+_HEIGHT,y:y+_WIDTH,:]
+
+        images.append(image)
+    images = np.stack(images)
+    assert images.shape[0] == _N
+
+    labels = np.ones(shape=(_N))*_OOD_CLASS
+
+    images, labels = images.astype(np.uint8), labels.astype(np.uint8)
+    return images[split:], labels[split:], images[:split], labels[:split]
+
 def get_mixed_cifar10(args):
     _N = _NUM_IMAGES_OOD["train"] + _NUM_IMAGES_OOD["validation"] + _NUM_IMAGES_OOD["test"]
     split = _NUM_IMAGES_OOD["test"]
@@ -154,8 +187,10 @@ def main(args):
         images, labels, images_t, labels_t = get_tin(args, resize=True)
     elif args.dataset == "cifar10mix":
         images, labels, images_t, labels_t = get_mixed_cifar10(args)
-    elif args.dataset == "sun":
-        raise NotImplementedError
+    elif args.dataset == "lsun":
+        images, labels, images_t, labels_t = get_lsun(args)
+    elif args.dataset == "lsunz":
+        images, labels, images_t, labels_t = get_lsun(args, resize=True)
     elif args.dataset == "all":
         raise NotImplementedError
 

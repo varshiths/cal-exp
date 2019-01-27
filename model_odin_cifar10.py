@@ -5,18 +5,18 @@ import tensorflow as tf
 import tensorflow_probability as tfp
 
 import resnet_model
+from utils import custom_cross_entropy, smooth_neg_labels, per_class_bin_loss
 
 from cifar10 import _HEIGHT, _WIDTH, _DEPTH, _NUM_CLASSES, _NUM_IMAGES
+from mmce import per_class_mmce_loss
 
 # We use a weight decay of 0.0002, which performs better than the 0.0001 that
 # was originally suggested.
 _WEIGHT_DECAY = 2e-4
 _MOMENTUM = 0.9
+_EPSILON = 1e-16
 
-EPSILON = 1e-10
-INF = 1e10
-
-def cifar10_model_fn(features, labels, mode, params):
+def cifar10_odin_model_fn(features, labels, mode, params):
   """Model function for CIFAR-10."""
 
   network = resnet_model.cifar10_resnet_v2_generator(
@@ -25,11 +25,20 @@ def cifar10_model_fn(features, labels, mode, params):
 
   inputs = tf.reshape(features, [-1, _HEIGHT, _WIDTH, _DEPTH])
   clabels = labels[:, :_NUM_CLASSES]
-
+  
+  # logits = network(inputs, mode == tf.estimator.ModeKeys.TRAIN)
   logits = network(inputs, mode == tf.estimator.ModeKeys.TRAIN, name="main")
-  probs = tf.nn.softmax(logits, axis=1)
+  probs = tf.nn.softmax(logits/params["temp"], axis=1)
+  
+  # perturbations
+  dvtv = tf.log(tf.reduce_max(probs, axis=1) + _EPSILON)
+  grad_sign = tf.sign(-tf.gradients(dvtv, inputs)[0])
+  ptd_inputs = inputs - params["epsilon"]*grad_sign
 
-  # Calculate loss, which includes softmax cross entropy
+  # ptd_logits = network(ptd_inputs, mode == tf.estimator.ModeKeys.TRAIN)
+  ptd_logits = network(ptd_inputs, mode == tf.estimator.ModeKeys.TRAIN, name="main")
+  ptd_probs = tf.nn.softmax(ptd_logits/params["temp"], axis=1)
+
   base_loss = tf.reduce_mean(
     tf.nn.softmax_cross_entropy_with_logits_v2(logits=logits, labels=clabels), 
     name="base_loss"
@@ -39,9 +48,10 @@ def cifar10_model_fn(features, labels, mode, params):
   loss = tf.identity(loss, name="loss_vec")
   loss_sum = tf.summary.scalar("loss", loss)
 
-  rate = tf.reduce_max(probs, axis=1)
+  rate = tf.reduce_max(ptd_probs, axis=1)
 
-  # print extra stuff here
+  # loss = tf.Print(loss, [tf.argmax(probs, axis=1), tf.reduce_max(probs, axis=1), probs], summarize=100, message="k_probs: ")
+  # loss = tf.Print(loss, [tf.argmax(ptd_probs, axis=1), tf.reduce_max(ptd_probs, axis=1), ptd_probs], summarize=100, message="k_ptd_probs: ")
 
   classes = tf.argmax(logits, axis=1)
   accuracy_m = tf.metrics.accuracy( tf.argmax(clabels, axis=1), classes, name="accuracy_metric")
@@ -71,7 +81,7 @@ def cifar10_model_fn(features, labels, mode, params):
     return tf.estimator.EstimatorSpec(
       mode=mode,
       loss=loss,
-      eval_metric_ops = eval_metric_ops
+      eval_metric_ops = eval_metric_ops,
       # evaluation_hooks=hooks,
       )
 

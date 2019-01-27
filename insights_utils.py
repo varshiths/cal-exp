@@ -41,6 +41,11 @@ def transform_line(tline, skey):
 def sigmoid(x):
     return 1 / (1 + np.exp(-x))
 
+def softmax(x, axis=-1):
+    maxx = np.max(x, axis=axis, keepdims=True)
+    emx = np.exp(x - maxx)
+    return emx/np.sum(emx, axis=axis, keepdims=True)
+
 def get_tensors_from_file(filename, tensors_to_get, nclasses, num_non_reshape=1):
 
     tsrsd = {}

@@ -8,40 +8,96 @@ import resnet_model
 
 from cifar10 import _HEIGHT, _WIDTH, _DEPTH, _NUM_CLASSES, _NUM_IMAGES
 
+
+_NUM_SAMPLES_Z = 64
+
 # We use a weight decay of 0.0002, which performs better than the 0.0001 that
 # was originally suggested.
 _WEIGHT_DECAY = 2e-4
 _MOMENTUM = 0.9
 
-EPSILON = 1e-10
-INF = 1e10
-
-def cifar10_model_fn(features, labels, mode, params):
+def cifar10_vibo_model_fn(features, labels, mode, params):
   """Model function for CIFAR-10."""
 
+  _DIM_Z = params["dim_z"]
   network = resnet_model.cifar10_resnet_v2_generator(
-      params['resnet_size'], _NUM_CLASSES, params['data_format']
+      params['resnet_size'], _DIM_Z*2, params['data_format']
     )
+  logits_from_z = tf.layers.Dense(_NUM_CLASSES)
 
   inputs = tf.reshape(features, [-1, _HEIGHT, _WIDTH, _DEPTH])
   clabels = labels[:, :_NUM_CLASSES]
+  
+  params_z = network(inputs, mode == tf.estimator.ModeKeys.TRAIN, name="main")
+  mean_z = params_z[:, :_DIM_Z]
+  std_z = tf.nn.softplus(params_z[:, _DIM_Z:])
 
-  logits = network(inputs, mode == tf.estimator.ModeKeys.TRAIN, name="main")
-  probs = tf.nn.softmax(logits, axis=1)
-
-  # Calculate loss, which includes softmax cross entropy
-  base_loss = tf.reduce_mean(
-    tf.nn.softmax_cross_entropy_with_logits_v2(logits=logits, labels=clabels), 
-    name="base_loss"
+  # _mean_z = tf.expand_dims(mean_z, axis=1)
+  # _std_z = tf.expand_dims(std_z, axis=1)
+  distr_z = tfp.distributions.MultivariateNormalDiag(
+      loc=mean_z,
+      scale_diag=std_z,
+      # loc=tf.broadcast_to(_mean_z, [-1, _NUM_CLASSES, _DIM_Z]),
+      # scale_diag=tf.broadcast_to(_std_z, [-1, _NUM_CLASSES, _DIM_Z]),
     )
 
-  loss = base_loss
+  # squeeze the _NUM_CLASSES dim
+  # z_samples = tf.squeeze(distr_z.sample(_NUM_SAMPLES_Z), axis=2)
+  z_samples = distr_z.sample(_NUM_SAMPLES_Z)
+  logits_samples = logits_from_z(z_samples)
+  br_clabels = tf.expand_dims(clabels, axis=0)
+  # br_clabels = tf.broadcast_to(clabels, shape=[_NUM_SAMPLES_Z, -1, _NUM_CLASSES])
+  br_clabels = tf.broadcast_to(br_clabels, shape=tf.shape(logits_samples))
+
+  # mean across samples and batch
+  base_loss = tf.reduce_mean(
+      tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(logits=logits_samples, labels=br_clabels), axis=0),
+      # tf.reduce_mean(custom_softmax_cross_entropy(logits=logits_samples, labels=br_clabels), axis=0),
+      axis=0,
+      name="base_loss"
+    )
+
+  mean_prior = tf.get_variable("prior_mean", (_DIM_Z))
+  std_prior = tf.nn.softplus(tf.get_variable("prior_std", (_DIM_Z)))
+
+  distr_prior_z = tfp.distributions.MultivariateNormalDiag(
+      loc=tf.expand_dims(mean_prior, axis=0),
+      scale_diag=tf.expand_dims(std_prior, axis=0),
+    )
+
+  kldivs = tfp.distributions.kl_divergence(distr_z, distr_prior_z)
+  # kldivs_corr = clabels * kldivs
+      # tf.reduce_sum(kldivs_corr, axis=1),
+  kldiv_term = tf.reduce_mean(
+      kldivs,
+      axis=0,
+    )
+
+  loss = base_loss + params["lamb"]*kldiv_term
   loss = tf.identity(loss, name="loss_vec")
   loss_sum = tf.summary.scalar("loss", loss)
 
-  rate = tf.reduce_max(probs, axis=1)
+  # squeeze the _NUM_CLASSES dim
+  sample_z = distr_z.sample()
+  # logits = logits_from_z(tf.squeeze(sample_z, axis=1))
+  logits = logits_from_z(sample_z)
+  probs = tf.nn.softmax(logits, 1)
 
-  # print extra stuff here
+  # ratio of e and m for the a particular input
+  # e_by_m = distr_z.prob(sample_z) / distr_prior_z.prob(sample_z)
+  # sum over num classes
+  # rate = tf.reduce_sum(e_by_m * 1, axis=1, keepdims=True)
+  # kl = 0 implies in distribution and kl->inf implies out of distr
+  # rate = exp(-kl) implies in distr if rate = 1
+
+  # rate = tf.exp(
+  #     -tf.reduce_sum(kldivs * probs, axis=1)
+  #   )
+  rate = tf.exp(-kldivs)
+
+  # loss = tf.Print(loss, [sample_z], message="E/M")
+  # loss = tf.Print(loss, [rate], message="Rate")
+  # loss = tf.Print(loss, [distr_z.prob(sample_z), distr_prior_z.prob(sample_z)], message="E/M")
 
   classes = tf.argmax(logits, axis=1)
   accuracy_m = tf.metrics.accuracy( tf.argmax(clabels, axis=1), classes, name="accuracy_metric")
@@ -71,7 +127,7 @@ def cifar10_model_fn(features, labels, mode, params):
     return tf.estimator.EstimatorSpec(
       mode=mode,
       loss=loss,
-      eval_metric_ops = eval_metric_ops
+      eval_metric_ops = eval_metric_ops,
       # evaluation_hooks=hooks,
       )
 

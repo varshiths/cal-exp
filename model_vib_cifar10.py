@@ -5,7 +5,6 @@ import tensorflow as tf
 import tensorflow_probability as tfp
 
 import resnet_model
-from utils import custom_softmax_cross_entropy
 
 from cifar10 import _HEIGHT, _WIDTH, _DEPTH, _NUM_CLASSES, _NUM_IMAGES
 
@@ -29,11 +28,9 @@ def cifar10_vib_model_fn(features, labels, mode, params):
   inputs = tf.reshape(features, [-1, _HEIGHT, _WIDTH, _DEPTH])
   clabels = labels[:, :_NUM_CLASSES]
   
-  params_z = network(inputs, mode == tf.estimator.ModeKeys.TRAIN)
+  params_z = network(inputs, mode == tf.estimator.ModeKeys.TRAIN, name="main")
   mean_z = params_z[:, :_DIM_Z]
   std_z = tf.nn.softplus(params_z[:, _DIM_Z:])
-
-  # import pdb; pdb.set_trace()
 
   _mean_z = tf.expand_dims(mean_z, axis=1)
   _std_z = tf.expand_dims(std_z, axis=1)
@@ -45,14 +42,18 @@ def cifar10_vib_model_fn(features, labels, mode, params):
     )
 
   # squeeze the _NUM_CLASSES dim
-  samples_z = tf.squeeze(distr_z.sample(_NUM_SAMPLES_Z), axis=2)
-  logits_samples = logits_from_z(samples_z)
+  z_samples = tf.squeeze(distr_z.sample(_NUM_SAMPLES_Z), axis=2)
+  logits_samples = logits_from_z(z_samples)
   br_clabels = tf.expand_dims(clabels, axis=0)
   # br_clabels = tf.broadcast_to(clabels, shape=[_NUM_SAMPLES_Z, -1, _NUM_CLASSES])
+  br_clabels = tf.broadcast_to(br_clabels, shape=tf.shape(logits_samples))
+
   # mean across samples and batch
-  cross_entr = tf.reduce_mean(
-      tf.reduce_mean(custom_softmax_cross_entropy(logits=logits_samples, labels=br_clabels), axis=0),
+  base_loss = tf.reduce_mean(
+      tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(logits=logits_samples, labels=br_clabels), axis=0),
+      # tf.reduce_mean(custom_softmax_cross_entropy(logits=logits_samples, labels=br_clabels), axis=0),
       axis=0,
+      name="base_loss"
     )
 
   mean_prior = tf.get_variable("prior_mean", (_NUM_CLASSES, _DIM_Z))
@@ -70,7 +71,7 @@ def cifar10_vib_model_fn(features, labels, mode, params):
       axis=0,
     )
 
-  loss = cross_entr + params["lamb"]*kldiv_term
+  loss = base_loss + params["lamb"]*kldiv_term
   loss = tf.identity(loss, name="loss_vec")
   loss_sum = tf.summary.scalar("loss", loss)
 
@@ -86,33 +87,32 @@ def cifar10_vib_model_fn(features, labels, mode, params):
   # kl = 0 implies in distribution and kl->inf implies out of distr
   # rate = exp(-kl) implies in distr if rate = 1
 
+  # rate = tf.exp(
+  #     -tf.reduce_sum(kldivs * probs, axis=1)
+  #   )
   rate = tf.exp(
-      -tf.reduce_sum(kldivs * probs, axis=1)
+      -tf.reduce_min(kldivs, axis=1)
     )
 
   # loss = tf.Print(loss, [sample_z], message="E/M")
   # loss = tf.Print(loss, [rate], message="Rate")
   # loss = tf.Print(loss, [distr_z.prob(sample_z), distr_prior_z.prob(sample_z)], message="E/M")
 
-
   classes = tf.argmax(logits, axis=1)
-  accuracy = tf.metrics.accuracy( tf.argmax(labels, axis=1), classes, name="accuracy_metric")
-  accuracy = tf.identity(accuracy[1], name="accuracy_vec")
+  accuracy_m = tf.metrics.accuracy( tf.argmax(clabels, axis=1), classes, name="accuracy_metric")
+  accuracy = tf.identity(accuracy_m[1], name="accuracy_vec")
   accuracy_sum = tf.summary.scalar("accuracy", accuracy)
 
   if mode == tf.estimator.ModeKeys.EVAL or params["predict"]:
 
-    # print
-    print_labels = tf.argmax(labels, 1)
+    # print # note this is labels not clabels
+    print_labels = tf.argmax(labels, axis=1)
     print_rate = rate
     print_probs = probs
     print_logits = logits
 
-    hooks = [tf.train.SummarySaverHook(
-          summary_op=tf.summary.merge([accuracy_sum]),
-          output_dir=os.path.join(params["model_dir"], "eval_core"),
-          save_steps=1,
-          )]
+    hooks = []
+    eval_metric_ops = { "accuracy": accuracy_m }
 
     # # printing stuff if predict
     if params["predict"]:
@@ -121,11 +121,13 @@ def cifar10_vib_model_fn(features, labels, mode, params):
       loss = tf.Print(loss, [print_probs], summarize=1000000, message='Probs')
       loss = tf.Print(loss, [print_logits], summarize=1000000, message='Logits')
       hooks = []
+      eval_metric_ops = {}
 
     return tf.estimator.EstimatorSpec(
       mode=mode,
       loss=loss,
-      evaluation_hooks=hooks,
+      eval_metric_ops = eval_metric_ops,
+      # evaluation_hooks=hooks,
       )
 
   if mode == tf.estimator.ModeKeys.TRAIN:

@@ -29,8 +29,12 @@ from warnings import warn
 import tensorflow as tf
 
 from model_cifar10 import cifar10_model_fn
+from model_odin_cifar10 import cifar10_odin_model_fn
+from model_logit_cifar10 import cifar10_logit_model_fn
+from model_vibo_cifar10 import cifar10_vibo_model_fn
 from model_vib_cifar10 import cifar10_vib_model_fn
 from model_bin_cifar10 import cifar10_bin_model_fn
+from model_binc_cifar10 import cifar10_binc_model_fn
 
 from input_cifar10 import _cifar10_input_fn
 
@@ -51,7 +55,7 @@ parser.add_argument('--resnet_size', type=str, default="50",
                           '- if of the format int-int, then wide resnet model is used'
                           '- if of the format int, then resnet is used.')
 
-parser.add_argument('--dim_z', type=int, default=100,
+parser.add_argument('--dim_z', type=int, default=64,
                     help='The dimension of the variaational space Z.')
 
 parser.add_argument('--pen_prob', type=float, default=0.5,
@@ -59,8 +63,18 @@ parser.add_argument('--pen_prob', type=float, default=0.5,
 parser.add_argument('--cutoff_weight', type=float, default=0.1,
                     help='The dimension of the variaational space Z.')
 
+parser.add_argument('--milden', type=float, default=0.1,
+                    help='The weight of the negative class in binary loss.')
+
 parser.add_argument('--lamb', type=float, default=1.0,
-                    help='The weight of the penalty to pull down logits.')
+                    help='The weight of the additional term in the loss.')
+parser.add_argument('--mmcec', type=float, default=1.0,
+                    help='The weight of the calibration term.')
+
+parser.add_argument('--temp', type=float, default=1.0,
+                    help='Temperature for scaling logits.')
+parser.add_argument('--epsilon', type=float, default=0.0,
+                    help='Magnitude of input pertrubation.')
 
 parser.add_argument('--variant', type=str, default="none",
                     help= 'What variant of the model is to be used.'
@@ -88,6 +102,7 @@ parser.add_argument('--test', type=int, default=0,
                           '4: test; main dataset + ood dataset'
                           '5: validate; main dataset'
                           '6: validate; ood dataset'
+                          '7: validate; main dataset + ood dataset'
                           )
 
 parser.add_argument('--ngpus', type=int, default=1,
@@ -116,12 +131,22 @@ def main(unused_argv):
     # save_summary_steps=100,
     )
 
-  if FLAGS.variant == "viby":
+  if FLAGS.variant == "base":
+    model_fn = cifar10_model_fn
+  elif FLAGS.variant == "odin":
+    model_fn = cifar10_odin_model_fn
+  elif FLAGS.variant == "logit":
+    model_fn = cifar10_logit_model_fn
+  elif FLAGS.variant == "vibo":
+    model_fn = cifar10_vibo_model_fn
+  elif FLAGS.variant == "vib":
     model_fn = cifar10_vib_model_fn
   elif FLAGS.variant == "bin":
     model_fn = cifar10_bin_model_fn
+  elif FLAGS.variant == "binc":
+    model_fn = cifar10_binc_model_fn
   else:
-    model_fn = cifar10_model_fn
+    raise Exception("Error: A model must be chosen")
 
   classifier = tf.estimator.Estimator(
       model_fn=model_fn, model_dir=FLAGS.model_dir, config=run_config,
@@ -131,10 +156,18 @@ def main(unused_argv):
           'batch_size'    : FLAGS.batch_size,
           'variant'       : FLAGS.variant,
           'model_dir'     : FLAGS.model_dir,
+
           'lamb'          : FLAGS.lamb,
+          'mmcec'         : FLAGS.mmcec,
+
+          'temp'          : FLAGS.temp,
+          'epsilon'       : FLAGS.epsilon,
+
           'dim_z'         : FLAGS.dim_z,
+          'milden'        : FLAGS.milden,
           'pen_prob'      : FLAGS.pen_prob,
           'cutoff_weight' : FLAGS.cutoff_weight,
+
           'predict'       : FLAGS.test not in [0, 1],
           # 'predict'     : False,
       },
@@ -183,7 +216,7 @@ def main(unused_argv):
       # hooks=[logging_hook]
       )
 
-  elif FLAGS.test in [5, 6]:
+  elif FLAGS.test in [5, 6, 7]:
     # Evaluate the model and print results along with logits and targets for t scaling
     eval_results = classifier.evaluate(
       input_fn=lambda: input_fn(FLAGS.test, FLAGS.dset, FLAGS.ood_dataset, FLAGS.batch_size, is_validating=True, hinged=_hinged_flag),

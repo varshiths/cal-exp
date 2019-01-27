@@ -36,9 +36,9 @@ def _cifar10_input_fn(mode, dset, ood_dataset, batch_size, num_epochs=1, is_vali
   Returns:
     A tuple of images and labels.
   """
-  is_training = mode in [0, 1, 5, 6]
-  is_ood = mode in [1, 3, 4, 6]
-  is_main = mode in [0, 1, 2, 4, 5]
+  is_training = mode in [0, 1, 5, 6, 7]
+  is_ood = mode in [1, 3, 4, 6, 7]
+  is_main = mode in [0, 1, 2, 4, 5, 7]
 
   assert (is_ood or is_main), ("Select at least one dataset.")
   

@@ -2,7 +2,8 @@
 __pycache__/
 savedmodels/
 outputs/
-figs/
+latest/
+fig*/
 
 log/
 configs/
@@ -17,6 +18,7 @@ configs/
 *.dat
 
 *.out
+*.pyc
 
 run0.sh
 run1.sh
@@ -26,3 +28,11 @@ run4.sh
 run5.sh
 run6.sh
 run7.sh
+run8.sh
+run9.sh
+run10.sh
+run11.sh
+run12.sh
+
+run01.sh
+run02.sh

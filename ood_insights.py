@@ -1,13 +1,22 @@
 
 import numpy as np
 
+import matplotlib
+import matplotlib.pyplot as plt
+
 def area_under(_points):
-    points = _points.copy()
+
+    # import pdb; pdb.set_trace()
+    # plt.figure()
+    # plt.plot( _points[:, 0], _points[:, 1] )
+    # plt.show()
+
+    points = _points.copy().astype(np.float128)
     points.sort(axis=0)
     areas = (points[1:, 0]-points[:-1, 0])*(points[:-1, 1]+points[1:, 1])/2
     return np.sum(areas)
 
-def ROC(probs, targets, step_size=1e-3):
+def ROC(probs, targets, step_size):
 
     npts = int(1/step_size)
     points = np.zeros((npts, 2))
@@ -18,11 +27,30 @@ def ROC(probs, targets, step_size=1e-3):
 
     return points
 
-def PR(probs, targets, reverse=False, step_size=1e-3):
+def area_under_ROC(probs, targets, step_size=1e-5):
 
-    if reverse:
-        targets = 1-targets
-        probs = 1-probs
+    # import pdb; pdb.set_trace()
+    
+    # auroc = 0.0
+    # fprt = 1.0
+    # for i in np.arange(0.1, 1, step_size):
+    #     fpr = FPR(probs, targets, i)
+    #     tpr = TPR(probs, targets, i)
+    #     auroc += (-fpr+fprt)*tpr
+    #     fprt = fpr
+    # auroc += fpr*tpr
+
+    return area_under(ROC(probs, targets, step_size))
+
+def PR(probs, targets, step_size, reverse=False):
+
+    if not reverse:
+        return PR_IN(probs, targets, step_size)
+    else:
+        return PR_OUT(probs, targets, step_size)
+
+def PR_IN(probs, targets, step_size):
+    print("PR-IN")
 
     npts = int(1/step_size)
     points = np.zeros((npts, 2))
@@ -31,16 +59,98 @@ def PR(probs, targets, reverse=False, step_size=1e-3):
         points[i, 0] = Recall(probs, targets, i*step_size)
         pr = Precision(probs, targets, i*step_size)
         if pr is None:
-            if i > 0:
-                points[i, 1] = points[i-1, 1]
-            else:
-                points[i, 1] = 0
+            points[i, 1] = points[i-1, 1] if i > 0 else 0
+        else:
+            points[i, 1] = pr
 
     return points
+
+def PR_OUT(probs, targets, step_size):
+    print("PR-OUT")
+
+    targets = 1-targets
+    probs = 1-probs
+
+    npts = int(1/step_size)
+    points = np.zeros((npts, 2))
+
+    for i in range(npts):
+        points[i, 0] = Recall(probs, targets, i*step_size)
+        pr = Precision(probs, targets, i*step_size)
+        if pr is None:
+            points[i, 1] = points[i-1, 1] if i > 0 else 0
+        else:
+            points[i, 1] = pr
+
+    return points
+
+def area_under_PR_IN(probs, targets, step_size):
+    print("area_under_PR_IN")
+
+    # import pdb; pdb.set_trace()
+
+    Y1 = probs[targets == 0]
+    X1 = probs[targets == 1]
+
+    start = 0
+    end = 1.0 
+    gap = (end- start)/100000
+
+    auprNew = 0.0
+    recallTemp = 1.0
+    recall, precision = 0, 0
+    for delta in np.arange(start, end, gap):
+        tp = np.sum(np.sum(X1 >= delta)) / np.float(len(X1))
+        fp = np.sum(np.sum(Y1 >= delta)) / np.float(len(Y1))
+        if tp + fp == 0: continue
+        precision = tp / (tp + fp)
+        recall = tp
+        auprNew += (recallTemp-recall)*precision
+        recallTemp = recall
+    auprNew += recall * precision
+
+    return auprNew
+
+def area_under_PR_OUT(probs, targets, step_size):
+    print("area_under_PR_OUT")
+
+    Y1 = probs[targets == 0]
+    X1 = probs[targets == 1]
+
+    start = 0
+    end = 1.0
+    gap = (end-start)/100000
+
+    auprNew = 0.0
+    recallTemp = 1.0
+    recall, precision = 0, 0
+    for delta in np.arange(end, start, -gap):
+        fp = np.sum(np.sum(X1 < delta)) / np.float(len(X1))
+        tp = np.sum(np.sum(Y1 < delta)) / np.float(len(Y1))
+        if tp + fp == 0: break
+        precision = tp / (tp + fp)
+        recall = tp
+        auprNew += (recallTemp-recall)*precision
+        recallTemp = recall
+    auprNew += recall * precision
+
+    return auprNew
+
+def area_under_PR(probs, targets, reverse=False, step_size=1e-3):
+
+    if not reverse:
+        # return area_under(PR(probs, targets, reverse, step_size))
+        return area_under_PR_IN(probs, targets, step_size)
+    else:
+        return area_under_PR_OUT(probs, targets, step_size)
+    # import pdb; pdb.set_trace()
+    # return aupr
+    # return area_under(PR(probs, targets, reverse, step_size))
 
 def Recall(*args):
     return TPR(*args)
 
+printed=False
 def Precision(probs, targets, thresh):
     # assumes targets == 1 is the positive class
     preds = (probs >= thresh).astype(np.float32)
@@ -50,7 +160,10 @@ def Precision(probs, targets, thresh):
     FP = np.sum((preds == 1).astype(np.float32)*(1-cmask))
 
     if TP + FP == 0:
-        print("Warning: No points with probs above", thresh)        
+        global printed
+        if not printed:
+            print(" Warning: No points with probs above", thresh)
+            printed = True
         return None
     return TP / (TP + FP)
 

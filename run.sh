@@ -1,14 +1,14 @@
 #!/bin/bash
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=0
 python3 main.py \
-    --test 4 \
+    --test 0 \
     --resnet_size 28-10 \
-    --batch_size 32 \
-    --ood_dataset tinz \
-    --model_dir savedmodels/viby_160_0.005 \
-    --variant viby \
-    --dim_z 160 \
+    --model_dir savedmodels/base \
+    --variant odin \
+    --batch_size 128 \
+    --train_epochs 200 \
     --dummy 0
-    # --train_epochs 90 \
-    # --lamb 1.0 \
-    # --epochs_per_eval 1 \
+    # --train_epochs 110 \
+    # --ood_dataset tinz \
+    # --pen_prob 0.10 \
+    # --cutoff_weight 1.0 \

@@ -5,10 +5,10 @@ import tensorflow as tf
 import tensorflow_probability as tfp
 
 import resnet_model
-from utils import custom_cross_entropy, smooth_neg_labels
+# from utils import custom_cross_entropy, smooth_neg_labels
+from utils import per_class_bin_loss
 
 from cifar10 import _HEIGHT, _WIDTH, _DEPTH, _NUM_CLASSES, _NUM_IMAGES
-
 
 # We use a weight decay of 0.0002, which performs better than the 0.0001 that
 # was originally suggested.
@@ -25,17 +25,20 @@ def cifar10_bin_model_fn(features, labels, mode, params):
   inputs = tf.reshape(features, [-1, _HEIGHT, _WIDTH, _DEPTH])
   clabels = labels[:, :_NUM_CLASSES]
   
-  logits = network(inputs, mode == tf.estimator.ModeKeys.TRAIN)
+  # logits = network(inputs, mode == tf.estimator.ModeKeys.TRAIN)
+  logits = network(inputs, mode == tf.estimator.ModeKeys.TRAIN, name="main")
   probs = tf.sigmoid(logits)
 
-  slabels, smask = smooth_neg_labels(clabels, params["cutoff_weight"], params["pen_prob"])
+  # slabels, smask = smooth_neg_labels(clabels, params["cutoff_weight"], params["pen_prob"])
   # slabels, smask = smooth_neg_labels(clabels, 1*1/_NUM_CLASSES, 0.45)
+  bt_loss = tf.reduce_mean(per_class_bin_loss(probs, clabels, params["milden"]), axis=1)
 
-  loss = tf.reduce_mean(custom_cross_entropy(probs, slabels))
+  loss = tf.reduce_mean(bt_loss, axis=0)
   loss = tf.identity(loss, name="loss_vec")
   loss_sum = tf.summary.scalar("loss", loss)
 
-  rate = tf.reduce_max(probs, axis=1)
+  probs_cal = tf.sigmoid(logits/params["temp"])
+  rate = tf.reduce_max(probs_cal, axis=1)
 
   # loss = tf.Print(loss, [smask], summarize=100, message="smask: ")
   # loss = tf.Print(loss, [tf.reduce_mean(probs)], summarize=100, message="mean: ")
@@ -43,8 +46,8 @@ def cifar10_bin_model_fn(features, labels, mode, params):
   # loss = tf.Print(loss, [clabels, slabels], summarize=100, message="slabels: ")
 
   classes = tf.argmax(logits, axis=1)
-  accuracy = tf.metrics.accuracy( tf.argmax(labels, axis=1), classes, name="accuracy_metric")
-  accuracy = tf.identity(accuracy[1], name="accuracy_vec")
+  accuracy_m = tf.metrics.accuracy( tf.argmax(clabels, axis=1), classes, name="accuracy_metric")
+  accuracy = tf.identity(accuracy_m[1], name="accuracy_vec")
   accuracy_sum = tf.summary.scalar("accuracy", accuracy)
 
   if mode == tf.estimator.ModeKeys.EVAL or params["predict"]:
@@ -55,11 +58,8 @@ def cifar10_bin_model_fn(features, labels, mode, params):
     print_probs = probs
     print_logits = logits
 
-    hooks = [tf.train.SummarySaverHook(
-          summary_op=tf.summary.merge([accuracy_sum]),
-          output_dir=os.path.join(params["model_dir"], "eval_core"),
-          save_steps=1,
-          )]
+    hooks = []
+    eval_metric_ops = { "accuracy": accuracy_m }
 
     # # printing stuff if predict
     if params["predict"]:
@@ -68,11 +68,13 @@ def cifar10_bin_model_fn(features, labels, mode, params):
       loss = tf.Print(loss, [print_probs], summarize=1000000, message='Probs')
       loss = tf.Print(loss, [print_logits], summarize=1000000, message='Logits')
       hooks = []
+      eval_metric_ops = {}
 
     return tf.estimator.EstimatorSpec(
       mode=mode,
       loss=loss,
-      evaluation_hooks=hooks,
+      eval_metric_ops = eval_metric_ops,
+      # evaluation_hooks=hooks,
       )
 
   if mode == tf.estimator.ModeKeys.TRAIN:
